@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="tr" data-build="45">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Yağmur Fırtınası</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="style.css?v=45">
+  <script>
+    // tanı için: sayfadaki tüm hatalar baştan toplanır (Ayarlar > Tanı bilgisini kopyala)
+    window.__errs = [];
+    addEventListener('error', function (e) { __errs.push(String(e.message) + ' @' + String(e.filename).split('/').pop() + ':' + e.lineno); });
+    addEventListener('unhandledrejection', function (e) { __errs.push('promise: ' + String(e.reason)); });
+  </script>
+</head>
+<body>
+  <!-- ================= ÜST BAR ================= -->
+  <header class="hdr">
+    <div class="hdr-in">
+      <div class="brand">
+        <img src="assets/logo.png" width="32" height="32" alt="">
+        <div>
+          <div class="brand-t">YAĞMUR FIRTINASI <span class="chip mono accent">v0.3</span></div>
+          <div class="lbl">ATMOSFERİK DÖNGÜ PANELİ</div>
+        </div>
+      </div>
+      <nav class="nav" id="tabs">
+        <button data-tab="cycle" class="active">Döngü</button>
+        <button data-tab="tree" id="tab-btn-tree" hidden>Şimşek Ağacı<span class="nav-badge" id="tree-badge" hidden></span></button>
+        <button data-tab="stars" id="tab-btn-stars" hidden>Yıldızlar</button>
+        <button data-tab="stats">İstatistikler</button>
+        <button data-tab="settings">Ayarlar</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="main">
+    <!-- ================= DÖNGÜ ================= -->
+    <div class="page cycle" id="page-cycle">
+      <section class="card hero a-hero">
+        <div class="bg-glow g-blue"></div><div class="bg-glow g-yellow"></div>
+        <div class="hero-in">
+          <div class="hero-left">
+            <div class="drop-tile" id="drop-tile">
+              <img src="assets/drop.svg" width="21.333" height="26.667" alt="">
+              <span class="ping"></span>
+            </div>
+            <div>
+              <div class="hero-num"><span id="damla" class="mono">10</span><span class="lbl" id="damla-lbl">DAMLA</span></div>
+              <div class="hero-sub">
+                <img src="assets/arrow-up.svg" width="9.333" height="9.333" alt="">
+                <span class="dps-wrap" id="dps-wrap" tabindex="0">
+                  <span id="dps" class="mono accent">+0 Damla/sn</span>
+                  <div class="tip" id="dps-tip" role="tooltip"></div>
+                </span>
+                <span class="chip mono yellow" id="hero-mult" hidden></span>
+              </div>
+            </div>
+          </div>
+          <div class="hero-right">
+            <button class="simsek-box" id="simsek-box" title="Şimşek Ağacı'nı aç" hidden>
+              <div class="sb-icon"><img src="assets/bolt-box.svg" width="16" height="20" alt=""></div>
+              <div>
+                <div class="lbl yellow">ŞİMŞEK REZERVİ</div>
+                <div class="sb-val"><span id="simsek">0</span><span class="mono">ŞİMŞEK</span></div>
+              </div>
+              <span class="sb-go mono">AĞAÇ ›</span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- gezegen -->
+      <section class="card planet-card a-planet">
+        <div class="card-h">
+          <div class="card-t"><img src="assets/globe.svg" width="15" height="15" alt=""> GEZEGEN BULUT KAPLAMASI</div>
+        </div>
+        <div class="planet-view" id="planet-wrap">
+          <canvas id="planet"></canvas>
+          <button class="pl-arrow prev" id="pl-prev" hidden aria-label="Önceki gezegen">‹</button>
+          <button class="pl-arrow next" id="pl-next" hidden aria-label="Sonraki gezegen">›</button>
+          <button class="callout" id="bolt-callout" hidden aria-label="Yıldırımı yakala">
+            <span class="co-icon"><img src="assets/bolt-dark.svg" width="13.333" height="16.667" alt=""></span>
+            <span><b>TIKLA! YILDIRIM DÜŞTÜ</b><small class="mono" id="bolt-left">10 SN İÇİNDE YAKALA</small></span>
+          </button>
+          <div class="buff-chip" id="buff-chip" hidden>
+            <img src="assets/bolt-small.svg" width="8" height="13.333" alt="">
+            <span class="mono yellow" id="buff-txt">YILDIRIM: ×5 ÜRETİM</span>
+            <span class="mono t-chip" id="buff-time">15s</span>
+          </div>
+          <button id="storm-btn" class="storm-btn" hidden>???</button>
+        </div>
+        <div class="pl-nav" id="pl-nav" hidden>
+          <span class="pl-name" id="pl-name">Okyanus</span>
+          <div class="pl-dots" id="pl-dots"></div>
+        </div>
+        <!-- yönlendirme: önceki gezegen tamamlanınca sıradaki gezegene geçiş -->
+        <button class="pl-new" id="pl-new" hidden>Yeni gezegen →</button>
+        <!-- kilitli gezegen: koşul, ilerleme, bedel, Aç -->
+        <div class="pl-lock" id="pl-lock" hidden>
+          <div class="row-between"><span class="lbl" id="lock-req">KOŞUL</span><span class="mono sm" id="lock-val"></span></div>
+          <div class="bar"><div class="bar-fill" id="lock-fill"></div></div>
+          <p class="sc-p" id="lock-desc"></p>
+          <button class="btn-primary" id="lock-btn"><span id="lock-btn-txt">AÇ</span></button>
+        </div>
+        <div class="cov" id="cov-box">
+          <div class="row-between"><span class="lbl">KAPLAMA İLERLEMESİ</span><span class="mono accent" id="cov-pct">%0 / %100.0</span></div>
+          <div class="cov-bar"><div class="cov-fill" id="cov-fill"><div class="shine"></div></div></div>
+          <label class="auto" id="auto-storm" hidden><input type="checkbox" data-auto="storm"> Otomatik fırtına açık</label>
+        </div>
+      </section>
+
+      <!-- üreticiler: oyunun ana kısmı, her zaman ekranda -->
+      <section class="card producers-sec a-prod">
+        <div class="card-h"><div class="card-t" id="prod-title">HİDROLOJİK DÖNGÜ ÜRETİCİLERİ</div></div>
+        <div id="producers" class="producers"></div>
+        <div id="pproducers" class="producers" hidden></div>
+        <div class="empty-note" id="plock-note" hidden>Gezegen açılınca üreticileri burada belirir.</div>
+      </section>
+
+      <!-- sıfırlamalar: alt şerit -->
+      <section class="resets a-resets">
+        <div class="sub-card" id="nem-card" hidden>
+          <div class="sc-h">
+            <div class="sc-t">Nem <span class="chip mono" id="nem-count">0</span></div>
+            <span class="chip mono accent soft" id="nem-badge">HAZIR</span>
+          </div>
+          <p class="sc-p" id="nem-desc"></p>
+          <button class="btn-primary" id="nem-btn"><img src="assets/nem.svg" width="13.333" height="15.833" alt=""><span id="nem-btn-txt">NEMLENDİR</span></button>
+          <label class="auto" id="auto-nem" hidden><input type="checkbox" data-auto="nem"> Nem Otomatiği açık</label>
+        </div>
+
+        <div class="sub-card" id="bd-card" hidden>
+          <div class="sc-h">
+            <div class="sc-t">Basınç Düşüşü <span class="chip mono" id="bd-count">0</span></div>
+            <span class="chip mono" id="bd-pct">%0</span>
+          </div>
+          <p class="sc-p" id="bd-desc"></p>
+          <div class="thr">
+            <div class="row-between"><span class="lbl">EŞİK</span><span class="mono yellow sm" id="bd-prog">0 / 20</span></div>
+            <div class="bar"><div class="bar-fill yellow-bg" id="bd-fill"></div></div>
+          </div>
+          <button class="btn-lock" id="bd-btn"><img src="assets/lock-btn.svg" width="12" height="15.75" alt="" class="lk"><span id="bd-btn-txt">20 Kümülonimbus gerekiyor</span></button>
+          <label class="auto" id="auto-bd" hidden><input type="checkbox" data-auto="bd"> Basınç Otomatiği açık</label>
+        </div>
+
+        <div class="sub-card" id="cephe-card" hidden>
+          <div class="sc-h">
+            <div class="sc-t">Hava Cephesi <span class="chip mono" id="cephe-count">0</span></div>
+            <img src="assets/lock-card.svg" width="12" height="15.75" alt="" id="cephe-lock">
+          </div>
+          <p class="sc-p" id="cephe-desc"></p>
+          <div class="thr" id="cephe-thr">
+            <div class="row-between"><span class="lbl">EŞİK</span><span class="mono yellow sm" id="cephe-prog">0 / 40</span></div>
+            <div class="bar"><div class="bar-fill yellow-bg" id="cephe-fill"></div></div>
+          </div>
+          <button class="btn-lock" id="cephe-btn"><img src="assets/lock-btn.svg" width="12" height="15.75" alt="" class="lk"><span id="cephe-btn-txt">40 Kasırga gerekiyor</span></button>
+          <label class="auto" id="auto-cephe" hidden><input type="checkbox" data-auto="cephe"> Cephe Otomatiği açık</label>
+        </div>
+
+        <!-- yeni gezegenler: tamamlanma ölçüsü + gezegene özgü mekanik -->
+        <div class="sub-card pl-goal" id="goal-card" hidden>
+          <div class="sc-h">
+            <div class="sc-t" id="goal-t">Tamamlanma</div>
+            <span class="chip mono accent soft" id="goal-done" hidden>TAMAMLANDI</span>
+          </div>
+          <p class="sc-p" id="goal-label"></p>
+          <div class="thr">
+            <div class="row-between"><span class="lbl">HEDEF</span><span class="mono accent sm" id="goal-val"></span></div>
+            <div class="bar"><div class="bar-fill accent-bg" id="goal-fill"></div></div>
+          </div>
+          <!-- gezegenin kendi sıfırlaması: kaplama dolunca (Buz'da tam donma) -->
+          <button class="btn-primary pr-btn" id="pr-btn" disabled><span id="pr-btn-txt">SIFIRLAMA</span> <span class="chip mono" id="pr-count">0</span></button>
+          <label class="auto" id="pr-auto" hidden><input type="checkbox" data-auto="buz"> Otomatik alım açık</label>
+        </div>
+
+        <div class="sub-card wide" id="buz-card" hidden>
+          <div class="sc-h">
+            <div class="sc-t">Erit <span class="chip mono" id="melt-count">0</span></div>
+            <span class="chip mono accent soft" id="melt-mult">×1</span>
+          </div>
+          <p class="sc-p">Üreticiler buz biriktirir. Erit, buzu tek seferde damlaya çevirir; ne kadar çok buz, o kadar büyük çarpan.</p>
+          <div class="gain-row"><span class="lbl">BİRİKEN BUZ</span><span class="mono accent" id="ice-amt">0</span></div>
+          <button class="btn-primary" id="melt-btn"><span id="melt-btn-txt">ERİT</span></button>
+        </div>
+
+        <div class="sub-card" id="evap-card" hidden>
+          <div class="sc-h">
+            <div class="sc-t">Buharlaşma</div>
+            <span class="chip mono" id="evap-pct">%0/sn</span>
+          </div>
+          <p class="sc-p" id="evap-desc"></p>
+          <div class="bar"><div class="bar-fill warm-bg" id="evap-fill"></div></div>
+          <button class="btn-primary" id="shield-btn"><span id="shield-btn-txt">BULUT KALKANI</span></button>
+        </div>
+        <div class="sub-card" id="shade-card" hidden>
+          <div class="sc-h">
+            <div class="sc-t">Gölge <span class="chip mono" id="shade-count">0</span></div>
+          </div>
+          <p class="sc-p">Her gölge buharlaşmayı biraz daha azaltır.</p>
+          <button class="btn-primary" id="shade-btn"><span id="shade-btn-txt">GÖLGE AL</span></button>
+        </div>
+
+        <div class="sub-card wide" id="gaz-card" hidden>
+          <div class="sc-h">
+            <div class="sc-t">Basınç <span class="chip mono" id="vent-count">0</span></div>
+            <span class="chip mono yellow" id="gas-mult">ŞİMŞEK ×1</span>
+          </div>
+          <p class="sc-p" id="gas-desc">Basınç sürekli yükselir. 1'i geçerse kendiliğinden boşalır ve ödülün yarısı kaybolur.</p>
+          <div class="thr">
+            <div class="row-between"><span class="lbl">BASINÇ</span><span class="mono sm" id="press-val">0,00</span></div>
+            <div class="bar press-bar"><div class="press-red"></div><div class="bar-fill accent-bg" id="press-fill"></div></div>
+          </div>
+          <button class="btn-primary" id="vent-btn"><span id="vent-btn-txt">BOŞALT</span></button>
+        </div>
+
+        <div class="empty-note" id="resets-empty">Gezegen nemlendikçe yeni katmanlar açılacak.</div>
+      </section>
+    </div>
+
+    <!-- ================= ŞİMŞEK AĞACI ================= -->
+    <div class="page tree-page" id="page-tree" hidden>
+      <section class="card treehead">
+        <div class="bg-glow g-yellow r"></div><div class="bg-glow g-blue l"></div>
+        <div class="treehead-in">
+          <div class="treehead-left">
+            <div class="treehead-icon"><img src="assets/tree-bolt.svg" width="18" height="20" alt=""></div>
+            <div class="treehead-t">ŞİMŞEK AĞACI</div>
+          </div>
+          <div class="treehead-right">
+            <div class="rezerv">
+              <img src="assets/bolt-yellow.svg" width="13.333" height="16.667" alt="">
+              <div class="rz-val"><span id="tree-simsek">0</span><span class="mono">ŞİMŞEK</span></div>
+            </div>
+            <button class="card2 return" id="return-btn">
+              <span class="rt-icon"><img src="assets/return.svg" width="16.667" height="16.667" alt=""></span>
+              <span class="rt-txt"><b>Döngüye Dön</b></span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card tree-canvas">
+        <!-- kaydırılabilir, yakınlaştırılabilir yıldırım: sürükle, tekerlek, Ctrl+tekerlek -->
+        <div class="tree-view" id="tree-view">
+          <div class="tree-inner" id="tree-inner">
+            <div class="tree-scale" id="tree-space">
+              <svg class="tree-bolt" id="tree-lines"></svg>
+              <div class="tree-nodes" id="tree-nodes"></div>
+            </div>
+          </div>
+        </div>
+        <div class="tree-detail" id="tree-detail"></div>
+        <div class="tree-zoom" id="tree-zoom">
+          <button data-z="-" title="Uzaklaş">−</button>
+          <button data-z="0" title="Kıvılcım'a dön">⌂</button>
+          <button data-z="+" title="Yakınlaş">+</button>
+        </div>
+        <div class="tree-progress mono" id="tree-progress"></div>
+      </section>
+    </div>
+
+    <!-- ================= YILDIZLAR (Katman 2 yer tutucu) ================= -->
+    <div class="page" id="page-stars" hidden>
+      <section class="card stars-ph">
+        <div class="lbl">KATMAN 2</div>
+        <h2>Yıldızlar</h2>
+        <p class="sc-p">Doygunluk kırıldı. Dört gezegenin ötesi şimdilik sessiz.</p>
+        <p class="mono muted sm">Katman 2 yakında</p>
+      </section>
+    </div>
+
+    <!-- ================= İSTATİSTİK ================= -->
+    <div class="page" id="page-stats" hidden>
+      <section class="card">
+        <div class="card-h"><div class="card-t">İSTATİSTİKLER</div><span class="lbl">CANLI</span></div>
+        <div class="stats" id="stats"></div>
+      </section>
+    </div>
+
+    <!-- ================= AYARLAR ================= -->
+    <div class="page" id="page-settings" hidden>
+      <div class="grid12">
+        <section class="card col6">
+          <div class="card-h"><div class="card-t">KAYIT</div><span class="lbl">OTO-KAYIT: 10 SN</span></div>
+          <p class="sc-p">Oyun tarayıcıya kaydedilir. Kapalıyken geçen süre tam olarak hesaplanır.</p>
+          <div class="btns">
+            <button id="save-btn" class="btn">Şimdi kaydet</button>
+            <button id="export-btn" class="btn">Dışa aktar</button>
+            <button id="import-btn" class="btn">İçe aktar</button>
+            <button id="reset-btn" class="btn danger">Her şeyi sıfırla</button>
+            <button id="diag-btn" class="btn">Tanı bilgisini kopyala</button>
+          </div>
+          <textarea id="save-text" rows="4" placeholder="Kayıt metni" hidden></textarea>
+          <div class="save-info mono" id="save-info"></div>
+        </section>
+        <section class="card col6">
+          <div class="card-h"><div class="card-t">GEZEGEN TEMASI</div><span class="lbl">ÖNİZLEME</span></div>
+          <p class="sc-p">Her gezegenin kendi renkleri var. "Gezegene göre" baktığın gezegenin renklerini kullanır; diğerlerini buradan önizleyebilirsin.</p>
+          <div class="btns" id="theme-btns">
+            <button class="btn" data-theme="auto">Gezegene göre</button>
+            <button class="btn" data-theme="okyanus">Okyanus</button>
+            <button class="btn" data-theme="buz">Buz</button>
+            <button class="btn" data-theme="col">Çöl</button>
+            <button class="btn" data-theme="gaz">Gaz devi</button>
+          </div>
+        </section>
+        <section class="card col6">
+          <div class="card-h"><div class="card-t">TEST HIZI</div><span class="lbl">YALNIZCA DENEME</span></div>
+          <p class="sc-p">Oyun zamanını hızlandırır. Süre ölçerken ×1'de bırak.</p>
+          <div class="btns seg-btns" id="speed-btns">
+            <button class="btn" data-speed="1">×1</button>
+            <button class="btn" data-speed="10">×10</button>
+            <button class="btn" data-speed="100">×100</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+
+  <!-- ================= ALT BAR ================= -->
+  <footer class="ftr">
+    <div class="ftr-in">
+      <div class="ftr-left">
+        <span class="ftr-item"><span class="dot-b"></span><span class="lbl">NEM:</span><span class="mono accent" id="f-nem">0</span></span>
+        <span class="ftr-item"><span class="lbl">BASINÇ DÜŞÜŞÜ:</span><span class="mono yellow" id="f-bd">0</span></span>
+        <span class="ftr-item"><span class="lbl">FIRTINA:</span><span class="mono" id="f-storms">0</span></span>
+        <span class="ftr-item"><span class="lbl">SON OTO-KAYIT:</span><span class="mono" id="f-save">—</span></span>
+      </div>
+      <div class="ftr-right">
+        <span class="ftr-item keys mono"><kbd>M</kbd> hepsini al <kbd>1</kbd>–<kbd>8</kbd> kademe <kbd>N</kbd> nem <kbd>B</kbd> basınç</span>
+        <span class="ftr-item"><img src="assets/notes.svg" width="11.375" height="9.333" alt=""><span class="mono" id="f-build">KATMAN 1 DEMO · YAPI ?</span></span>
+      </div>
+    </div>
+  </footer>
+
+  <div id="toasts" class="toasts"></div>
+  <div id="floats" class="floats"></div>
+  <div id="flash" class="flash"></div>
+  <div id="modal" class="modal" hidden>
+    <div class="modal-card">
+      <div id="modal-body"></div>
+      <button id="modal-close" class="btn-primary">Devam</button>
+    </div>
+  </div>
+
+  <script src="lib/break_eternity.min.js"></script>
+  <script src="js/core.js?v=45"></script>
+  <script src="js/planets.js?v=45"></script>
+  <script src="js/planet.js?v=45"></script>
+  <script src="js/themes.js?v=45"></script>
+  <script src="js/ui.js?v=45"></script>
+  <script src="js/main.js?v=45"></script>
+</body>
+</html>
