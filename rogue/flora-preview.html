@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Çiçek Atölyesi</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap">
+  <style>
+    :root {
+      --bg0: #1d1a2c; --bg1: #2c2440; --panel: rgba(255, 246, 230, 0.05); --line: rgba(255, 246, 230, 0.1);
+      --text: #f4ead8; --muted: #b6a9c2; --accent: #f2c14e; --sand0: #b9a27f; --sand1: #a28a66;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; }
+    body {
+      min-height: 100vh; color: var(--text); font: 15px/1.45 Geist, system-ui, sans-serif;
+      background: radial-gradient(1200px 600px at 70% -10%, #4a3a5e 0%, transparent 60%), linear-gradient(180deg, var(--bg1), var(--bg0) 70%);
+      background-attachment: fixed;
+    }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 16px 60px; }
+    header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 22px; }
+    h1 { margin: 0; font-size: 30px; line-height: 1.1; font-weight: 700; letter-spacing: -0.01em; }
+    .sub { margin: 6px 0 0; color: var(--muted); }
+    .ctrls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+    .seg button, .tog {
+      font: 600 13px/1 Geist, system-ui, sans-serif; color: var(--muted); background: none; border: 0; border-radius: 999px;
+      padding: 8px 12px; cursor: pointer;
+    }
+    .seg button[aria-pressed="true"] { background: var(--text); color: var(--bg0); }
+    .tog { border: 1px solid var(--line); background: var(--panel); }
+    .tog[aria-pressed="true"] { color: var(--bg0); background: var(--accent); border-color: var(--accent); }
+    .fps { font: 600 12px/1 Geist, system-ui, sans-serif; color: var(--muted); min-width: 52px; text-align: right; }
+    section { margin-top: 26px; }
+    h2 { margin: 0 0 10px; font-size: 17px; font-weight: 700; }
+    h2 small { font-weight: 500; color: var(--muted); font-size: 13px; margin-left: 8px; }
+    .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px; overflow-x: auto; }
+    .grid { display: grid; grid-template-columns: 112px auto; align-items: end; row-gap: 4px; min-width: max-content; }
+    .lbl { align-self: center; font-weight: 700; font-size: 15px; padding-right: 10px; }
+    .lbl span { display: block; font: 500 11px/1.3 Geist, system-ui, sans-serif; color: var(--muted); letter-spacing: 0.02em; }
+    .heads { display: flex; }
+    .heads div { text-align: center; font: 600 11px/1.2 Geist, system-ui, sans-serif; color: var(--muted); padding-bottom: 4px; }
+    .heads div.b { color: var(--accent); }
+    canvas { display: block; }
+    .note { color: var(--muted); font-size: 13px; margin: 8px 2px 0; }
+    .icons { display: flex; flex-wrap: wrap; gap: 18px; }
+    .icons figure { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; font: 600 12px/1.2 Geist, system-ui, sans-serif; color: var(--muted); }
+    .icons .disc { display: grid; place-items: center; border-radius: 50%; background: #3a3150; border: 2px solid rgba(255, 246, 230, 0.16); }
+    .icons .disc img { width: 72%; height: 72%; object-fit: contain; }
+    .icons .disc.big img { width: 80%; height: 80%; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>Çiçek Atölyesi</h1>
+        <p class="sub">Kodla çizilen düz vektör çiçekler: büyüme, açılma ve solma.</p>
+      </div>
+      <div class="ctrls">
+        <div class="seg" id="sizes" role="group" aria-label="Boyut">
+          <button data-s="52">Oyun boyu</button>
+          <button data-s="90" aria-pressed="true">Büyük</button>
+          <button data-s="150">Çok büyük</button>
+        </div>
+        <button class="tog" id="sway" aria-pressed="true">Rüzgâr</button>
+        <span class="fps" id="fps"></span>
+      </div>
+    </header>
+
+    <section>
+      <h2>Canlı döngü <small>filizden açılmaya, sonra kaybolma</small></h2>
+      <div class="card"><canvas id="live"></canvas></div>
+    </section>
+
+    <section>
+      <h2>Büyüme aşamaları <small>su / ihtiyaç oranı, sonra açılma ve solgun hâl</small></h2>
+      <div class="card"><div class="grid" id="stages"></div></div>
+    </section>
+
+    <section>
+      <h2>Oyun ölçeği <small>oyundaki boylarla, yaklaşık oyundaki sıklıkta karışık tarla</small></h2>
+      <div class="card"><canvas id="field"></canvas></div>
+      <p class="note">Her çiçek oyundaki gibi rastgele eğim, boy ve ayna çevirme alır (tohum = bitki no). Zemin oyundaki ile aynı çizerle çizilir; solda nemli toprak, sağda uzun süre sulanıp hafif yeşillenmiş toprak.</p>
+    </section>
+
+    <section>
+      <h2>Bulut ve yağmur <small>oyundaki boyutlarla: dolu bulut ve suyu azalmış bulut</small></h2>
+      <div class="card"><canvas id="sky"></canvas></div>
+      <p class="note">Soldaki bulutun altında toprak yağmurla koyulaşır, uzun süre sulanınca hafif yeşile döner. Sağdaki bulut az suyla küçülüp grileşir.</p>
+    </section>
+
+    <section>
+      <h2>Ağaç ikonları <small>yetenek ağacındaki gibi daire içinde (görselin %72'si)</small></h2>
+      <div class="card"><div class="icons" id="icons"></div></div>
+    </section>
+  </div>
+
+  <script src="js/config.js?v=8"></script>
+  <script src="js/flora.js?v=8"></script>
+  <script src="js/render.js?v=8"></script>
+  <script>
+  (function () {
+    'use strict';
+    const C = RD.CONFIG, F = RD.Flora, ART = RD.Render.art;
+    const TYPES = ['cactus', 'daisy', 'tulip', 'lavender', 'bluebell', 'rose', 'sunflower', 'skylily'];
+    // In-game plant heights (keep in sync with render.js PLANT_SIZE)
+    const GAME_SIZE = { cactus: 40, daisy: 46, tulip: 50, lavender: 52, bluebell: 48, rose: 52, sunflower: 62, skylily: 62 };
+    const STAGES = [
+      { t: '0', g: 0 }, { t: '0.1', g: 0.1 }, { t: '0.25', g: 0.25 }, { t: '0.4', g: 0.4 }, { t: '0.6', g: 0.6 },
+      { t: '0.8', g: 0.8 }, { t: '1.0', g: 1 }, { t: 'açılış ½', g: 1, b: 0.5, hi: true }, { t: 'açık', g: 1, b: 1, hi: true },
+      { t: 'solgun', g: 0.85, w: 1 },
+    ];
+    let size = 90, sway = true, clock = 0;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+
+    function setupCanvas(cv, w, h) {
+      cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+      cv.style.width = w + 'px'; cv.style.height = h + 'px';
+      const ctx = cv.getContext('2d');
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return ctx;
+    }
+    // Offscreen canvas painted with the game's ground painter (cached per size).
+    const groundCache = {};
+    function groundCanvas(w, h, seed, band) {
+      const key = w + 'x' + h + '|' + seed + '|' + (band ? 1 : 0);
+      if (groundCache[key]) return groundCache[key];
+      const c = document.createElement('canvas');
+      c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
+      const g = c.getContext('2d');
+      g.scale(dpr, dpr);
+      if (band) {
+        // Strip with gently curved top and bottom edges
+        g.beginPath();
+        g.moveTo(0, 6); g.quadraticCurveTo(w * 0.5, -4, w, 6);
+        g.lineTo(w, h - 6); g.quadraticCurveTo(w * 0.5, h + 4, 0, h - 6); g.closePath();
+        g.clip();
+      }
+      ART.paintGround(g, w, h, seed);
+      groundCache[key] = c;
+      return c;
+    }
+    // Ground strip (same look as the game field); plants stand on y = gy.
+    function ground(ctx, w, gy, depth) {
+      const top = gy - depth * 0.45;
+      ctx.drawImage(groundCanvas(w, depth, 21, true), 0, top, w, depth);
+    }
+    function swayOf(seed, w) { return sway ? Math.sin(clock * (1.7 - 0.9 * (w || 0)) + seed * 1.37) * 0.035 * (1 - 0.5 * (w || 0)) : 0; }
+
+    // ----- stage rows -----
+    const rows = [];
+    function buildStages() {
+      const host = document.getElementById('stages');
+      host.innerHTML = '';
+      rows.length = 0;
+      const cell = Math.round(Math.max(64, size * 0.95)), h = Math.round(size * 1.12 + 26);
+      host.appendChild(document.createElement('div'));
+      const heads = document.createElement('div');
+      heads.className = 'heads';
+      STAGES.forEach(function (s) {
+        const d = document.createElement('div');
+        d.style.width = cell + 'px'; d.textContent = s.t; if (s.hi) d.className = 'b';
+        heads.appendChild(d);
+      });
+      host.appendChild(heads);
+      TYPES.forEach(function (type) {
+        const cfg = C.plants[type];
+        const lbl = document.createElement('div');
+        lbl.className = 'lbl';
+        lbl.innerHTML = cfg.label + '<span>' + cfg.need + ' su · ' + cfg.coins + ' para</span>';
+        const cv = document.createElement('canvas');
+        host.appendChild(lbl); host.appendChild(cv);
+        rows.push({ type: type, cv: cv, ctx: setupCanvas(cv, cell * STAGES.length, h), w: cell * STAGES.length, h: h, cell: cell });
+      });
+    }
+    function drawStages() {
+      rows.forEach(function (r, ri) {
+        const ctx = r.ctx, gy = r.h - 16;
+        ctx.clearRect(0, 0, r.w, r.h);
+        ground(ctx, r.w, gy, 26);
+        STAGES.forEach(function (s, i) {
+          F.draw(ctx, r.type, r.cell * (i + 0.5), gy, { size: size, growth: s.g, bloom: s.b || 0, wilt: s.w || 0, sway: swayOf(ri * 10 + i, s.w) });
+        });
+      });
+    }
+
+    // ----- live loop -----
+    const live = document.getElementById('live');
+    let liveCtx = null, liveW = 0, liveH = 0, liveCell = 0;
+    function buildLive() {
+      liveCell = Math.round(Math.max(110, size * 1.25));
+      liveW = liveCell * TYPES.length; liveH = Math.round(size * 1.15 + 50);
+      liveCtx = setupCanvas(live, liveW, liveH);
+    }
+    const PERIOD = 6.2, GROW = 3.6, OPEN = 0.3, HOLD = 1.4, FADE = 0.6;
+    function drawLive() {
+      const ctx = liveCtx, gy = liveH - 34;
+      ctx.clearRect(0, 0, liveW, liveH);
+      ground(ctx, liveW, gy, 30);
+      const t = clock % PERIOD;
+      let g = 1, b = 0, fade = 1;
+      if (t < GROW) g = t / GROW;
+      else if (t < GROW + OPEN) b = (t - GROW) / OPEN;
+      else if (t < GROW + OPEN + HOLD) b = 1;
+      else { b = 1; fade = Math.max(0, 1 - (t - GROW - OPEN - HOLD) / FADE); fade *= fade; }
+      ctx.font = '600 12px Geist, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      TYPES.forEach(function (type, i) {
+        const x = liveCell * (i + 0.5);
+        F.draw(ctx, type, x, gy, { size: size, growth: g, bloom: b, fade: fade, sway: swayOf(i * 3 + 1, 0), seed: i + 3 });
+        ctx.fillStyle = 'rgba(60,44,30,0.85)';
+        ctx.fillText(C.plants[type].label, x, gy + 22);
+      });
+      // progress bar
+      ctx.fillStyle = 'rgba(244,234,216,0.12)'; ctx.fillRect(12, 8, liveW - 24, 3);
+      ctx.fillStyle = '#a9d6f5'; ctx.fillRect(12, 8, (liveW - 24) * Math.min(1, t / GROW), 3);
+    }
+
+    // ----- game-scale field -----
+    const field = document.getElementById('field');
+    let fieldCtx = null, fieldW = 0, fieldH = 220, fieldPlants = [];
+    function buildField() {
+      fieldW = Math.min(1120, Math.max(320, field.parentElement.clientWidth - 30));
+      fieldCtx = setupCanvas(field, fieldW, fieldH);
+      fieldPlants = [];
+      let id = 1;
+      for (let y = 70; y < fieldH - 10; y += 46) {
+        for (let x = 30 + ((y / 46) % 2) * 20; x < fieldW - 20; x += 44) {
+          const type = TYPES[(id * 5 + Math.floor(y)) % TYPES.length];
+          const r = Math.sin(id * 12.9898) * 43758.5453; const fr = r - Math.floor(r);
+          fieldPlants.push({ id: id, x: x + (fr - 0.5) * 10, y: y + (fr - 0.5) * 8, type: type, g: fr < 0.35 ? 0.3 + fr * 2 : 1, b: fr < 0.35 ? 0 : 1 });
+          id++;
+        }
+      }
+    }
+    let fieldWet = null;
+    function buildFieldWet() {
+      // Two static patches: plain damp soil (left) and soil watered for long (right, grass tint)
+      fieldWet = ART.createWet(fieldW, fieldH);
+      ART.wetDisc(fieldWet, fieldW * 0.2, fieldH * 0.55, 46, 1);
+      ART.wetDisc(fieldWet, fieldW * 0.8, fieldH * 0.5, 50, 1);
+      for (let j = 0; j < fieldWet.gh; j++) for (let i = 0; i < fieldWet.gw; i++) {
+        const k = j * fieldWet.gw + i;
+        if (i * fieldWet.cell > fieldW * 0.5) fieldWet.soak[k] = fieldWet.wet[k];
+      }
+    }
+    function drawField() {
+      const ctx = fieldCtx;
+      ctx.drawImage(groundCanvas(fieldW, fieldH, 1337, false), 0, 0, fieldW, fieldH);
+      ART.drawWet(ctx, fieldWet, 0);
+      for (let i = 0; i < fieldPlants.length; i++) {
+        const p = fieldPlants[i];
+        F.draw(ctx, p.type, p.x, p.y, { size: GAME_SIZE[p.type], growth: p.g, bloom: p.b, sway: swayOf(p.id, 0), seed: p.id });
+      }
+    }
+
+    // ----- cloud + rain sample (game sizes: cloud r 44 full / 60% when empty, rain radius 40) -----
+    const sky = document.getElementById('sky');
+    let skyCtx = null, skyW = 0, skyH = 340, skyWet = null;
+    const skyScenes = [
+      { fx: 0.3, low: 0, rr: 40, drops: [], splashes: [], plants: [['rose', -14, -6, 0.7, 3], ['daisy', 16, 8, 0.4, 4], ['tulip', -30, 30, 1, 5]] },
+      { fx: 0.74, low: 0.9, rr: 40, drops: [], splashes: [], plants: [['sunflower', 8, 0, 0.55, 6], ['cactus', -26, 22, 0.8, 7]] },
+    ];
+    function buildSky() {
+      skyW = Math.min(1120, Math.max(320, sky.parentElement.clientWidth - 30));
+      skyCtx = setupCanvas(sky, skyW, skyH);
+      skyWet = ART.createWet(skyW, skyH);
+      skyScenes.forEach(function (s) { s.drops.length = 0; s.splashes.length = 0; });
+    }
+    function drawSky(dt) {
+      const ctx = skyCtx, gy = skyH - 70;
+      const lift = Math.min(130, Math.max(105, skyH * 0.16));   // same rule as render.js cloudLift()
+      ctx.drawImage(groundCanvas(skyW, skyH, 77, false), 0, 0, skyW, skyH);
+      skyScenes.forEach(function (s) { ART.wetDisc(skyWet, skyW * s.fx, gy, s.rr, 1.6 * dt); });
+      ART.drawWet(ctx, skyWet, dt);
+      skyScenes.forEach(function (s, si) {
+        const x = skyW * s.fx, r = 44 * (0.6 + 0.4 * (1 - s.low));
+        ART.drawTarget(ctx, x, gy, s.rr, true);
+        s.plants.forEach(function (p) {
+          F.draw(ctx, p[0], x + p[1], gy + p[2], { size: GAME_SIZE[p[0]], growth: p[3], sway: swayOf(p[4], 0) + Math.sin(clock * 9 + p[4]) * 0.02, seed: p[4] });
+        });
+        const cy = Math.max(r * 0.75, gy - lift);
+        ART.stepRain(ctx, s.drops, dt, x, gy, s.rr, cy + r * (ART.cloudBottom - 0.12), function (hx, hy) {
+          if (Math.random() < 0.3) ART.addSplash(s.splashes, hx, hy, 24);
+        });
+        ART.stepSplashes(ctx, s.splashes, dt);
+        ART.drawCloud(ctx, x, cy, r, s.low, 0.03, clock + si);
+        ctx.font = '600 12px Geist, system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'rgba(60,44,30,0.85)';
+        ctx.fillText(s.low ? 'su az' : 'su dolu', x, skyH - 14);
+      });
+      // Idle cloud (behind shop/results) for reference
+      const ix = skyW * 0.52 + Math.sin(clock * 0.5) * 20;
+      ART.drawCloud(ctx, ix, 64, 52, 0.25, 0.015, clock);
+    }
+
+    // ----- tree icons (RD.Flora.icon inside tree-node style discs) -----
+    function buildIcons() {
+      const host = document.getElementById('icons');
+      host.innerHTML = '';
+      [64, 104].forEach(function (d) {
+        TYPES.forEach(function (type) {
+          const fig = document.createElement('figure');
+          const disc = document.createElement('div');
+          disc.className = 'disc' + (d > 80 ? ' big' : '');
+          disc.style.width = disc.style.height = d + 'px';
+          const img = document.createElement('img');
+          img.src = F.icon(type, 64); img.alt = '';
+          disc.appendChild(img); fig.appendChild(disc);
+          const cap = document.createElement('figcaption');
+          cap.textContent = C.plants[type].label;
+          fig.appendChild(cap);
+          host.appendChild(fig);
+        });
+      });
+    }
+
+    function buildAll() { buildLive(); buildStages(); buildField(); buildFieldWet(); buildSky(); drawStages(); drawField(); }
+
+    document.getElementById('sizes').addEventListener('click', function (e) {
+      const b = e.target.closest('button'); if (!b) return;
+      size = +b.dataset.s;
+      this.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', x === b ? 'true' : 'false'); });
+      buildAll();
+    });
+    document.getElementById('sway').addEventListener('click', function () {
+      sway = !sway; this.setAttribute('aria-pressed', sway ? 'true' : 'false');
+      drawStages(); drawField();
+    });
+    let rt = 0;
+    window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(function () { buildField(); buildFieldWet(); buildSky(); drawField(); }, 150); });
+
+    // fps meter over the whole page redraw (~100 plants per frame with wind on)
+    const fpsEl = document.getElementById('fps');
+    let last = performance.now(), acc = 0, frames = 0;
+    function frame(now) {
+      const dt = Math.min(0.05, (now - last) / 1000); last = now;
+      clock += dt;
+      drawLive();
+      drawSky(dt);
+      if (sway) { drawStages(); drawField(); }
+      acc += dt; frames++;
+      if (acc >= 0.5) { fpsEl.textContent = Math.round(frames / acc) + ' fps'; acc = 0; frames = 0; }
+      requestAnimationFrame(frame);
+    }
+    buildAll();
+    buildIcons();
+    requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>

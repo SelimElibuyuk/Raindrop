@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="tr" data-build="7">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Yağmur Fırtınası: Rogue</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="style.css?v=8">
+  <script>
+    window.__errs = [];
+    addEventListener('error', function (e) { __errs.push(String(e.message) + ' @' + String(e.filename).split('/').pop() + ':' + e.lineno); });
+  </script>
+</head>
+<body>
+  <!-- Play area: canvas always fills it; screens are overlays on top -->
+  <div class="stage" id="stage">
+    <canvas id="field"></canvas>
+
+    <!-- HUD (visible during a run) -->
+    <div class="hud" id="hud" hidden></div>
+
+    <!-- Results overlay -->
+    <section class="screen" id="screen-results" hidden></section>
+
+    <!-- Shop overlay -->
+    <section class="screen" id="screen-shop" hidden></section>
+
+    <!-- Debug panel (toggle with D or the gear button) -->
+    <button class="dbg-btn" id="dbg-btn" aria-label="Debug paneli">⚙</button>
+    <aside class="dbg" id="dbg" hidden></aside>
+  </div>
+
+  <script src="js/config.js?v=8"></script>
+  <script src="js/flora.js?v=8"></script>
+  <script src="js/meta.js?v=8"></script>
+  <script src="js/run.js?v=8"></script>
+  <script src="js/render.js?v=8"></script>
+  <script src="js/input.js?v=8"></script>
+  <script src="js/ui.js?v=8"></script>
+  <script src="js/main.js?v=8"></script>
+</body>
+</html>
