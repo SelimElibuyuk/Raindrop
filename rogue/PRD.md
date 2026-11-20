@@ -96,3 +96,93 @@ Bunlar çekirdek döngü eğlenceli bulunduktan sonra değerlendirilecek.
 - İlk run ≈ 10–15 sn sürüyor ve 5–10 çiçek açılıyor.
 - 5–6 run sonra ilk "su artık yetiyor" anı (süre modunda) hissediliyor.
 - İki sistem ve drain ayarları debug panelinden run ortasında değil, run başında değiştirilebiliyor.
+
+## 11. Sıradaki işler (2026-11-17 listesi; 1 ve 2 numara 2026-11-20'de yapıldı)
+Durum: Vektör çiçekler (`js/flora.js`) ile zemin, bulut ve yağmur çizimleri kullanıcı tarafından beğenildi. Ağaç v2 ve 8 çiçek oyunda.
+Henüz commit yapılmadı.
+
+1. **Zemin gerçekten canlansın.** Sulanan yerler şu an sadece hafifçe yeşeriyor, bu yetersiz. Hedef:
+   - sulanan yerlerde gerçek çimenler çıksın (flat vektör ot öbekleri, filizler, belki küçük yabani çiçekler),
+   - çok sulanan bölgeler yemyeşil olsun, yeşillik komşu kareye yavaşça yayılabilir,
+   - "kuraklığa karşı alanları yeşertiyorsun" hissi run boyunca net görünsün.
+   - İlgili kod: `js/render.js` içindeki `wet`/`soak` ızgarası ve `drawWet` (`SOAK_PER_WET`, `ag`). Çimen çizimi flora.js tarzında olmalı.
+     Performans için çimenleri hücre başına önbelleğe alıp ızgarayla birlikte çiz.
+2. **Tomurcuk hâlindeki çiçekler zor ayırt ediliyor.** Büyüme sırasında türler birbirine benziyor.
+   - Tomurcuk/sap aşamasında her türü belirgin yap: tür rengi daha erken ve daha güçlü görünsün,
+     silüetler (yaprak şekli, boy, tomurcuk biçimi) daha farklı olsun, gerekirse altta küçük bir tür rengi noktası olsun.
+   - Kontrol yeri: `flora-preview.html` "Büyüme aşamaları" satırları (growth 0.25–0.8 arası).
+3. **Yetenek ağacı henüz istenen hâlde değil.** Kullanıcı birkaç eksiği söyleyecek; o eksikler konuşulduktan sonra
+   fiyatlar ve geliştirmeler birlikte yeniden dengelenecek. Mevcut veri ve ekonomi simülasyonu: `design/tree-v2.md`.
+   Bilinen açık: 20. run'dan sonra satın almalar 3–5 run'da bire düşüyor; tek seferlik pahalı düğümler (thunder, time3, pollen) bölünebilir.
+   **Görsel ilham (kullanıcının paylaştığı 4 örnek, `design/refs/skilltree-ref-1..4.webp`). Kopyalanmayacak, kendi tarzımızla yorumlanacak:**
+   - Ağaç **çok daha büyük ve yoğun** olmalı (örneklerde 100+ düğüm): uzun zincirler, dallanan alt kollar, dal sonlarında
+     yelpaze gibi açılan uç düğümler, ortada büyük bir merkez/hub ve dalların başında daha büyük "ana düğümler".
+   - Düğümlerde **ikon + seviye göstergesi** (ör. "LVL 1/3", Roma rakamı veya pip), açılmamışlar **kilit ikonuyla gri**,
+     alınabilir/yeni olanlar küçük bir rozet/nokta ile işaretli (yeşil artı, "!" gibi).
+   - **Bağlantı çizgileri durumu anlatır:** alınmış yol parlak/renkli, kilitli yol soluk.
+   - Dallar **renk/tema ile ayrışır** (her dalın kendi rengi ve ikon ailesi), aynı istatistiğin seviyeleri yan yana zincir olur.
+   - Kapsayıcı bir **çerçeve/zemin teması** (parşömen kâğıdı, ahşap pano gibi) ve arkada soluk dekoratif çizimler var. Bizde
+     bunun karşılığı oyunun temasına uygun olmalı (ör. gökyüzü/bulut haritası, toprak/kök ağı, yaprak damarları).
+   - **Hover/seçim kartı:** ad, seviye, açıklama, "şimdi → sonra" değeri, maliyet (birden fazla para birimi olabilir).
+   - Kenarda kontrol ipuçları ("Sürükle: kaydır", "Tekerlek: yakınlaştır", "Ortala"), büyük "Başla" butonu, köşede para göstergeleri.
+   - Not: menülerde, butonlarda ve kutularda **henüz oturmuş bir stil yok**. Ağacı yaparken genel UI dili de (çerçeve, buton, panel,
+     tipografi) birlikte belirlenecek. Oyunun flat vektör sanatıyla (flora.js) uyumlu olmalı.
+4. Küçük notlar: gerçek telefonda performans ve dokunmatik (pinch/sürükleme) testi yapılmadı; iki run sistemi (Süre + Su /
+   Artan Buharlaşma) hâlâ playtest ile seçilecek.
+
+## 12. Bölüm + boss çiçek sistemi (TASLAK, 2026-11-20, kullanıcı fikri; ayrıntılar konuşuluyor)
+Kullanıcının fikri: zemini sulamak (yeşertmek) bir **bölüm barını** doldurur. Bar dolunca **boss çiçek** çıkar. Boss sulanınca
+bölüm tamamlanır ve yeni bölüme geçilir. **Her bölüm yeni bir çiçek açar.** Boss düz sulanmaz; her bölümde küçük bir hilesi olur.
+Kullanıcının örneği: boss'un farklı yerlerde 3 kolu var, her biri ayrı sulanmalı ve sulanan kol çevresini kurutur.
+
+Claude'un önerisi (onay bekliyor):
+- 8 bölüm (her biri bir çiçek). Bölüm N'nin boss'u yeni çiçeğin dev hâli; yenince o çiçek sonraki run'larda tarlada çıkar.
+  Böylece çiçek açılımları ağaçtan bölümlere taşınır, ağaç bulutun gücüne odaklanır.
+- Bar run içinde dolar (yeşertilen alan + açan çiçekler). Dolarsa boss gelir. Su/süre biterse run biter, para ve geliştirmeler
+  kalır, oyuncu güçlenip tekrar dener (roguelite).
+- Boss hileleri (bölüm sırasına göre zorlaşır):
+  1. Dev Papatya: taç yaprakları çevrede tek tek açılır, her biri ayrı noktadan sulanır.
+  2. Lale Kraliçesi: 3 kol farklı yerlerde; sulanan kol çevresini kurutur (yeşilliği siler).
+  3. Kaktüs Devi: dikenleri açıkken su işlemez; ritimle, dikenler kapanınca sula.
+  4. Lavanta: sulandıkça başka yere kaçar; bulut hızı önemli.
+  5. Çan Çiçeği: çanlar sırayla çalar, doğru sırayla sulanmalı.
+  6. Gül: dikenli sarmaşık kalkanı; önce çevresini yeşert, kalkan düşsün, sonra sula.
+  7. Ayçiçeği: bulut üstünde fazla kalırsa gölgede solar; kısa kısa sula.
+  8. Gök Zambağı (final): fazlı; kollar, kaçma ve kuraklık dalgası bir arada.
+**Kararlar (kullanıcı, 2026-11-20):**
+- Bar **run içinde** dolar. Aynı run'da bar dolup boss yenilmezse run biter; para ve geliştirmeler kalır, oyuncu tekrar dener.
+- Ağaçtaki çiçek düğümleri **çiçek güçlendirmeye** döner. Çiçeği bölüm açar; ağaç o çiçeğin adedini, parasını ve özelliğini güçlendirir.
+  Açılmamış çiçeğin düğümleri ağaçta görünmez.
+- **Önce 3 bölümlük prototip.** His oturunca 8 bölüme genişletilecek.
+
+**Prototip (3 bölüm):** başlangıç çiçekleri kaktüs ve papatya.
+| Bölüm | Ad | Boss | Hile | Açtığı çiçek |
+|---|---|---|---|---|
+| 1 | Çatlak Vadi | Lale Kraliçesi | 3 kol farklı yerlerde; sulanmayan kol su kaybeder, sulanan kol çevresindeki bitkileri kurutur | Lale |
+| 2 | Dikenli Bayır | Gül Ana | Dikenli sarmaşık kalkanı: önce çevresini yeşert, kalkan düşünce gövdeyi sula | Gül |
+| 3 | Güneş Tepesi | Dev Ayçiçeği | Bulut üstünde fazla kalırsa gölgede kalıp solar; kısa kısa sula | Ayçiçeği |
+
+Bar puanı: yeşeren her toprak hücresi +1, açan her çiçek +2. Bar dolunca boss çıkar, bulut biraz su ve süre kazanır.
+Bar hedefleri: Bölüm 1 → 60, Bölüm 2 → 120, Bölüm 3 → 170 puan. Boss gelince +8/9/10 sn ve +40/50/60 su; ödül 40/90/180 para.
+Bot simülasyonu (2026-11-20): geliştirmesiz bar %74'te kalıyor; erken geliştirmelerle Bölüm 1 geçiliyor, Bölüm 2 sınırda (~%40),
+orta seviye geliştirmelerle Bölüm 3 açılıyor. Kod: `run.js` (_waterGround, _addBar, _spawnBoss, _updateBoss), `config.levels`,
+`meta` (data.level, unlockedFlowers, açılmamış çiçeğin ağaç düğümleri gizli).
+Boss yenilince run zaferle biter (bonus para), sonraki bölüm ve yeni çiçek açılır.
+
+**Durum (2026-11-20 sonu):** Bölüm barı, 3 boss (mantık + görsel), HUD bölüm paneli, boss bandı, zafer/kaçtı/normal sonuç ekranları,
+ağaçta bölüm şeridi ve debug'da "Bölümü seç" çalışıyor. Boss yenilince kutlama 1.4 sn tam ekran oynuyor, sonra sonuç ekranı açılıyor.
+Sulanan zeminde çimen/yonca/kır çiçeği (§11.1) ve türe özgü tomurcuklar (§11.2) yapıldı. Gerçek telefonda test edilmedi.
+Açık: boss'ların gerçek oyunda his testi (özellikle Lale kollarının bulutun altında kalması, Ayçiçeği'nin su azken başsız görünmesi),
+8 bölüme genişleme, yeni büyük yetenek ağacı ve genel UI stili (§11.3).
+
+**Playtest düzeltmesi (2026-11-20, kullanıcı: "oyun çok hızlı bitiyor, upgrade'ler önemsiz, 3 boss çok kolay"):**
+- Yağmur şiddeti tabanı 3 → 2, çiçeklerin su ihtiyacı yeniden ayarlandı (kaktüs 3, papatya 5, lale 7, lavanta 5, çan 7, gül 10,
+  ayçiçeği 12, zambak 28). Bir çiçek ~1.5–2.5 sn sürer; her şiddet seviyesi belirgin hızlandırır.
+- Zemin yeşerme hızı yağmur şiddetine bağlı (`soil += şiddet × 1.5 / sn`); hücre 2 suda bara sayılır, 8 suda yemyeşil olur.
+- Açan çiçek çevresinde (44 px) küçük bir alanı yeşertir (bara da puan verir).
+- Boss yenilince boss'tan dışa yayılan **zafer dalgası**: geçtiği her yer yemyeşil olur, kalan tüm çiçekler açar, ekstra para gelir.
+- Yeni sayılar: bar 110 / 380 / 480; boss su ihtiyacı Lale kolu 10 (kuruma 1.5/sn), Gül 70 (kalkan: 130 px içinde alanın 8/10'u yeşil),
+  Ayçiçeği 75 (ısı sınırı 1.3 sn, yanınca 8 su/sn kaybeder); ödül 30 / 70 / 140.
+- İlerleme simülasyonu (bot, her run sonrası en ucuz geliştirmeyi alıyor, medyan): Bölüm 1 boss'una 9. run'da ulaşıp 13.'de yeniyor,
+  Bölüm 2: 24/25, Bölüm 3: 40/44. Önceden 3 bölüm ~15 run'da bitiyordu. Gerçek oyuncu biraz daha yavaş olur.
+- Görsel istekler: her bitkide boss tarzı su halkası, tomurcuklar daha büyük ve sulanana kadar hafifçe nefes alıyor.

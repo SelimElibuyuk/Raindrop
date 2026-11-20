@@ -44,7 +44,8 @@
     const stats = runStats(settings);
     const rules = RD.buildRules(stats, settings);
     const f = RD.Render.fieldSize();
-    game.run = new RD.Run(stats, rules, f);
+    game.winHold = false;
+    game.run = new RD.Run(stats, rules, f, { level: RD.Meta.currentLevel(), flowers: RD.Meta.unlockedFlowers() });
     game.screen = 'run';
     RD.UI.showScreen('run');
   }
@@ -68,10 +69,19 @@
     const dt = Math.min(0.05, (now - (game.last || now)) / 1000);
     game.last = now;
     if (game.screen === 'run' && game.run) {
-      const inp = RD.Input.state;
-      game.run.update(dt, { x: inp.x, y: inp.y, raining: inp.down });
-      RD.UI.updateHud(game.run);
-      if (game.run.over) endRun();
+      if (game.winHold) {
+        // Boss beaten: the victory wave greens the map and blooms every flower, then the results open
+        if (game.run.victoryStep(dt)) endRun();
+        RD.UI.updateHud(game.run);
+      } else {
+        const inp = RD.Input.state;
+        game.run.update(dt, { x: inp.x, y: inp.y, raining: inp.down });
+        RD.UI.updateHud(game.run);
+        if (game.run.over) {
+          if (game.run.endReason === 'boss') game.winHold = true;
+          else endRun();
+        }
+      }
     }
     RD.Render.draw(game.screen === 'run' ? game.run : null, dt);
     requestAnimationFrame(frame);

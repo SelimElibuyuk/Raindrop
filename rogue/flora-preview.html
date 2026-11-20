@@ -80,15 +80,27 @@
     </section>
 
     <section>
+      <h2>Ayırt edilebilirlik <small>oyun boyunda 8 tür yan yana: büyüme 0.3, 0.5 ve 0.8</small></h2>
+      <div class="card"><canvas id="distinct"></canvas></div>
+      <p class="note">Boyut düğmesinden bağımsız, her zaman oyundaki boylarla çizilir. Solda tohumsuz, sağda oyundaki gibi tohumlu (rastgele eğim, boy, ayna) aynı sıra.</p>
+    </section>
+
+    <section>
       <h2>Oyun ölçeği <small>oyundaki boylarla, yaklaşık oyundaki sıklıkta karışık tarla</small></h2>
       <div class="card"><canvas id="field"></canvas></div>
-      <p class="note">Her çiçek oyundaki gibi rastgele eğim, boy ve ayna çevirme alır (tohum = bitki no). Zemin oyundaki ile aynı çizerle çizilir; solda nemli toprak, sağda uzun süre sulanıp hafif yeşillenmiş toprak.</p>
+      <p class="note">Her çiçek oyundaki gibi rastgele eğim, boy ve ayna çevirme alır (tohum = bitki no). Zemin oyundaki ile aynı çizerle çizilir; solda nemli toprak, sağda uzun süre sulanıp yemyeşil çimenle kaplanmış toprak.</p>
+    </section>
+
+    <section>
+      <h2>Zemin canlanıyor <small>kuru → filiz → çimen → yemyeşil, kır çiçekleriyle (oyundaki hızla)</small></h2>
+      <div class="card"><canvas id="grow"></canvas><canvas id="growStages" style="margin-top:12px"></canvas></div>
+      <p class="note">Üstte bulut bir noktayı oyundaki hızla sular: ~2–3 sn'de ilk filizler, ~6–8 sn'de yemyeşil halı, yonca ve küçük kır çiçekleri. Yağmur durunca toprak kurur ama çimen kalır ve komşu karelere yavaşça yayılır. Ortadaki genç papatya ve lale (büyüme 0.3) çimenin üstünde okunabilir kalmalı. Altta aşamalar yan yana.</p>
     </section>
 
     <section>
       <h2>Bulut ve yağmur <small>oyundaki boyutlarla: dolu bulut ve suyu azalmış bulut</small></h2>
       <div class="card"><canvas id="sky"></canvas></div>
-      <p class="note">Soldaki bulutun altında toprak yağmurla koyulaşır, uzun süre sulanınca hafif yeşile döner. Sağdaki bulut az suyla küçülüp grileşir.</p>
+      <p class="note">Bulutların altında toprak yağmurla koyulaşır, birkaç saniye sonra çimen çıkar ve sulandıkça gürleşir. Sağdaki bulut az suyla küçülüp grileşir.</p>
     </section>
 
     <section>
@@ -97,9 +109,9 @@
     </section>
   </div>
 
-  <script src="js/config.js?v=8"></script>
-  <script src="js/flora.js?v=8"></script>
-  <script src="js/render.js?v=8"></script>
+  <script src="js/config.js?v=9"></script>
+  <script src="js/flora.js?v=9"></script>
+  <script src="js/render.js?v=9"></script>
   <script>
   (function () {
     'use strict';
@@ -186,6 +198,42 @@
       });
     }
 
+    // ----- distinguishability: all types at game size, growth 0.3 / 0.5 / 0.8 -----
+    const distinct = document.getElementById('distinct');
+    const D_GROWTH = [0.3, 0.5, 0.8], D_CELL = 58, D_LEFT = 40, D_GAP = 30, D_ROW = 100, D_TOP = 22;
+    let distinctCtx = null, distinctW = 0, distinctH = 0;
+    function buildDistinct() {
+      distinctW = D_LEFT + D_CELL * TYPES.length * 2 + D_GAP;
+      distinctH = D_TOP + D_ROW * D_GROWTH.length;
+      distinctCtx = setupCanvas(distinct, distinctW, distinctH);
+    }
+    function drawDistinct() {
+      const ctx = distinctCtx, n = TYPES.length;
+      ctx.clearRect(0, 0, distinctW, distinctH);
+      ctx.textAlign = 'center';
+      ctx.font = '600 11px Geist, system-ui, sans-serif';
+      ctx.fillStyle = 'rgba(244,234,216,0.6)';
+      ctx.fillText('tohumsuz', D_LEFT + D_CELL * n * 0.5, 13);
+      ctx.fillText('tohumlu (oyundaki gibi)', D_LEFT + D_GAP + D_CELL * n * 1.5, 13);
+      D_GROWTH.forEach(function (g, ri) {
+        const gy = D_TOP + D_ROW * ri + 74;
+        ground(ctx, distinctW, gy, 36);
+        ctx.font = '700 13px Geist, system-ui, sans-serif';
+        ctx.fillStyle = '#f4ead8';
+        ctx.fillText(String(g), D_LEFT * 0.5, gy - 30);
+        ctx.font = '600 10px Geist, system-ui, sans-serif';
+        for (let j = 0; j < n * 2; j++) {
+          const type = TYPES[j % n], seeded = j >= n;
+          const x = D_LEFT + (seeded ? D_GAP : 0) + D_CELL * (j + 0.5);
+          const o = { size: GAME_SIZE[type], growth: g, sway: swayOf(ri * 20 + j, 0) };
+          if (seeded) o.seed = 200 + ri * 13 + j * 7;
+          F.draw(ctx, type, x, gy, o);
+          ctx.fillStyle = 'rgba(60,44,30,0.85)';
+          ctx.fillText(C.plants[type].label, x, gy + 15);
+        }
+      });
+    }
+
     // ----- live loop -----
     const live = document.getElementById('live');
     let liveCtx = null, liveW = 0, liveH = 0, liveCell = 0;
@@ -235,26 +283,110 @@
         }
       }
     }
-    let fieldWet = null;
+    let fieldWet = null, fieldGreenAll = true;
     function buildFieldWet() {
-      // Two static patches: plain damp soil (left) and soil watered for long (right, grass tint)
+      // Two static patches: plain damp soil (left) and soil watered for long (right, lush grass)
       fieldWet = ART.createWet(fieldW, fieldH);
       ART.wetDisc(fieldWet, fieldW * 0.2, fieldH * 0.55, 46, 1);
       ART.wetDisc(fieldWet, fieldW * 0.8, fieldH * 0.5, 50, 1);
       for (let j = 0; j < fieldWet.gh; j++) for (let i = 0; i < fieldWet.gw; i++) {
         const k = j * fieldWet.gw + i;
-        if (i * fieldWet.cell > fieldW * 0.5) fieldWet.soak[k] = fieldWet.wet[k];
+        fieldWet.soak[k] = i * fieldWet.cell > fieldW * 0.5 ? Math.min(1, fieldWet.wet[k] * 1.4) : 0;
       }
+      fieldGreenAll = true;
     }
     function drawField() {
       const ctx = fieldCtx;
       ctx.drawImage(groundCanvas(fieldW, fieldH, 1337, false), 0, 0, fieldW, fieldH);
       ART.drawWet(ctx, fieldWet, 0);
+      ART.drawGreen(ctx, fieldWet, 0, dpr, fieldGreenAll);
+      fieldGreenAll = false;
       for (let i = 0; i < fieldPlants.length; i++) {
         const p = fieldPlants[i];
         F.draw(ctx, p.type, p.x, p.y, { size: GAME_SIZE[p.type], growth: p.g, bloom: p.b, sway: swayOf(p.id, 0), seed: p.id });
       }
     }
+
+    // ----- living ground: one spot watered at game speed, dry -> sprouts -> lush (own loop + clock) -----
+    const growCv = document.getElementById('grow'), growStagesCv = document.getElementById('growStages');
+    const G_PERIOD = 15, G_RAIN = 9, G_RR = 44;
+    const growScene = { ctx: null, w: 0, h: 250, wet: null, drops: [], splashes: [], t: 0 };
+    const stageStrip = { ctx: null, w: 0, h: 130, wet: null, all: true };
+    const G_STAGES = [{ s: 0, t: 'kuru' }, { s: 0.3, t: 'filiz (~2–3 sn)' }, { s: 0.5, t: 'çimen' }, { s: 0.75, t: 'gür çimen + yonca' }, { s: 1, t: 'yemyeşil + kır çiçeği' }];
+    function buildGrow() {
+      const w = Math.min(1120, Math.max(320, growCv.parentElement.clientWidth - 30));
+      growScene.w = w; growScene.ctx = setupCanvas(growCv, w, growScene.h);
+      growScene.wet = ART.createWet(w, growScene.h);
+      growScene.t = 0; growScene.drops.length = 0; growScene.splashes.length = 0;
+      // Static strip: the same growth stages side by side (soft round patches, organic edges)
+      stageStrip.w = w; stageStrip.ctx = setupCanvas(growStagesCv, w, stageStrip.h);
+      const L = stageStrip.wet = ART.createWet(w, stageStrip.h), R = Math.min(52, w / G_STAGES.length * 0.42);
+      G_STAGES.forEach(function (st, si) {
+        const cx = w * (si + 0.5) / G_STAGES.length, cy = stageStrip.h * 0.42;
+        for (let j = 0; j < L.gh; j++) for (let i = 0; i < L.gw; i++) {
+          const d = Math.hypot((i + 0.5) * L.cell - cx, (j + 0.5) * L.cell - cy) / R;
+          if (d >= 1) continue;
+          const f = Math.min(1, 1.6 * (1 - d * d)), k = j * L.gw + i;
+          L.wet[k] = Math.max(L.wet[k], 0.8 * f);
+          L.soak[k] = Math.max(L.soak[k], st.s * f);
+        }
+      });
+      stageStrip.all = true;
+      drawStageStrip();
+    }
+    function drawStageStrip() {
+      const S = stageStrip, ctx = S.ctx;
+      ctx.drawImage(groundCanvas(S.w, S.h, 55, false), 0, 0, S.w, S.h);
+      ART.drawWet(ctx, S.wet, 0);
+      ART.drawGreen(ctx, S.wet, 0, dpr, S.all);
+      S.all = false;
+      ctx.font = '600 12px Geist, system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillStyle = 'rgba(60,44,30,0.9)';
+      G_STAGES.forEach(function (st, si) { ctx.fillText(st.t, S.w * (si + 0.5) / G_STAGES.length, S.h - 12); });
+    }
+    function drawGrow(dt) {
+      const S = growScene, ctx = S.ctx, gy = S.h - 72, x = S.w * 0.5;
+      S.t += dt;
+      if (S.t >= G_PERIOD) { S.t -= G_PERIOD; ART.resetWet(S.wet); S.drops.length = 0; S.splashes.length = 0; }
+      const raining = S.t < G_RAIN;
+      ctx.drawImage(groundCanvas(S.w, S.h, 91, false), 0, 0, S.w, S.h);
+      if (raining) ART.wetDisc(S.wet, x, gy, G_RR, 1.6 * dt);   // same gain as the game (WET_GAIN)
+      ART.drawWet(ctx, S.wet, dt);
+      ART.drawGreen(ctx, S.wet, dt, dpr);
+      ART.drawTarget(ctx, x, gy, G_RR, raining);
+      // Young plants (growth 0.3) to check they stay readable on lush grass, plus one bloomed flower
+      [['daisy', -20, -4, 0.3, 0, 11], ['tulip', 22, 10, 0.32, 0, 12], ['lavender', -2, 26, 1, 1, 13]].forEach(function (p) {
+        F.draw(ctx, p[0], x + p[1], gy + p[2], { size: GAME_SIZE[p[0]], growth: p[3], bloom: p[4], sway: Math.sin(S.t * 1.7 + p[5]) * 0.035, seed: p[5] });
+      });
+      const r = 44, cy = Math.max(r * 0.75, gy - 105);
+      if (raining) {
+        ART.stepRain(ctx, S.drops, dt, x, gy, G_RR, cy + r * (ART.cloudBottom - 0.12), function (hx, hy) {
+          if (Math.random() < 0.3) ART.addSplash(S.splashes, hx, hy, 24);
+        });
+      }
+      ART.stepSplashes(ctx, S.splashes, dt);
+      ART.drawCloud(ctx, x + (raining ? 0 : (S.t - G_RAIN) * 30), cy, r * (raining ? 1 - 0.4 * S.t / G_RAIN : 0.6), raining ? S.t / G_RAIN * 0.9 : 0.9, 0.03, S.t);
+      // timer + stage label
+      const stage = S.t < 2 ? 'kuru' : S.t < 4.5 ? 'filiz' : S.t < 6.5 ? 'çimen' : S.t < G_RAIN ? 'yemyeşil' : 'yağmur durdu: çimen kalıyor';
+      ctx.font = '700 14px Geist, system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillStyle = 'rgba(60,44,30,0.9)';
+      ctx.fillText(Math.min(S.t, G_RAIN).toFixed(1) + ' sn yağmur · ' + stage, 14, S.h - 16);
+      ctx.fillStyle = 'rgba(244,234,216,0.18)'; ctx.fillRect(14, S.h - 8, S.w - 28, 3);
+      ctx.fillStyle = '#a9d6f5'; ctx.fillRect(14, S.h - 8, (S.w - 28) * Math.min(1, S.t / G_RAIN), 3);
+    }
+    (function () {
+      let last = performance.now(), rt2 = 0;
+      function loop(now) {
+        const dt = Math.min(0.05, (now - last) / 1000); last = now;
+        drawGrow(dt);
+        requestAnimationFrame(loop);
+      }
+      window.addEventListener('resize', function () { clearTimeout(rt2); rt2 = setTimeout(buildGrow, 150); });
+      buildGrow();
+      requestAnimationFrame(loop);
+    })();
 
     // ----- cloud + rain sample (game sizes: cloud r 44 full / 60% when empty, rain radius 40) -----
     const sky = document.getElementById('sky');
@@ -275,6 +407,7 @@
       ctx.drawImage(groundCanvas(skyW, skyH, 77, false), 0, 0, skyW, skyH);
       skyScenes.forEach(function (s) { ART.wetDisc(skyWet, skyW * s.fx, gy, s.rr, 1.6 * dt); });
       ART.drawWet(ctx, skyWet, dt);
+      ART.drawGreen(ctx, skyWet, dt, dpr);
       skyScenes.forEach(function (s, si) {
         const x = skyW * s.fx, r = 44 * (0.6 + 0.4 * (1 - s.low));
         ART.drawTarget(ctx, x, gy, s.rr, true);
@@ -318,7 +451,7 @@
       });
     }
 
-    function buildAll() { buildLive(); buildStages(); buildField(); buildFieldWet(); buildSky(); drawStages(); drawField(); }
+    function buildAll() { buildLive(); buildStages(); buildDistinct(); buildField(); buildFieldWet(); buildSky(); drawStages(); drawDistinct(); drawField(); }
 
     document.getElementById('sizes').addEventListener('click', function (e) {
       const b = e.target.closest('button'); if (!b) return;
@@ -328,7 +461,7 @@
     });
     document.getElementById('sway').addEventListener('click', function () {
       sway = !sway; this.setAttribute('aria-pressed', sway ? 'true' : 'false');
-      drawStages(); drawField();
+      drawStages(); drawDistinct(); drawField();
     });
     let rt = 0;
     window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(function () { buildField(); buildFieldWet(); buildSky(); drawField(); }, 150); });
@@ -341,7 +474,7 @@
       clock += dt;
       drawLive();
       drawSky(dt);
-      if (sway) { drawStages(); drawField(); }
+      if (sway) { drawStages(); drawDistinct(); drawField(); }
       acc += dt; frames++;
       if (acc >= 0.5) { fpsEl.textContent = Math.round(frames / acc) + ' fps'; acc = 0; frames = 0; }
       requestAnimationFrame(frame);

@@ -9,12 +9,31 @@
   const CELL = 14;             // wetness grid cell size, CSS px
   const WET_GAIN = 1.6;        // wetness per second while rained on
   const WET_DECAY = 0.035;     // wetness lost per second (slow fade)
-  const SOAK_PER_WET = 0.09;   // grass tint gained per unit of rain on soaked soil (~7 s of rain to full)
-  const SOAK_DECAY = 0.004;    // grass tint lost per second (lingers for the rest of the run)
+  const SOAK_PER_WET = 0.09;   // grass growth per unit of rain on damp soil (~7 s of rain at the centre to lush)
+  const SOAK_WET_MIN = 0.3;    // soil must be this damp before grass starts to grow
+  // Grass slowly creeps out of lush cells into their neighbours (soak never decays: grass stays all run).
+  // Only used by flora-preview.html; in the game the grass follows run.soil (see syncSoil).
+  const SPREAD_TICK = 0.25, SPREAD_FROM = 0.6, SPREAD_DROP = 0.3, SPREAD_RATE = 0.07;
+  // In-game: grass level comes from the run's soil grid; dampness is only a short-lived tint under the rain.
+  const GAME_WET_DECAY = 0.16;   // damp tint fades in ~5 s
+  const SOIL_GROW = 3.2;         // displayed grass level rises at most this much per second (grows, no pop)
+  const SOIL_EDGE_NOISE = 0.2;   // per-cell jitter on partly grown cells -> organic patch edges
+  // Greenery cache: grass is painted per cell into a persistent offscreen canvas, in square tiles of
+  // GREEN_TILE cells. Only tiles whose cells changed growth level are repainted.
+  const GREEN_LEVELS = 40;     // growth quantization (small steps -> blades visibly scale up, no pop)
+  const GREEN_TICK = 0.1;      // s between level scans
+  const GREEN_TILES_PER_FRAME = 2;
+  const GREEN_TILE = 5;        // cells per tile side (small: a repaint redraws (5+2)^2 cells)
+  // A cell's grass never reaches further than this many cells outside the cell (blades <= 0.8 cell tall,
+  // carpet ellipse <= 1.1 cell from the centre). Used both to mark dirty tiles and to pick the cells a
+  // tile repaints, so the two always agree and tiles stay seam-free.
+  const GREEN_REACH = 1;
   // The logical cloud point is where the rain lands. The cloud itself floats high above it,
   // so the plant being watered stays visible; a ground shadow + ring mark the target.
-  function cloudLift() { return clamp(H * 0.16, 105, 130); } // tallest flower (62px) + cloud underside stays clear
-  const MAX_PARTICLES = 160;
+  // Tallest flower is 62 px × GROW_BOOST (~80 px while growing) + seed variation + pulse: lift keeps the
+  // watered plant's head below the cloud's underside.
+  function cloudLift() { return clamp(H * 0.19, 125, 150); }
+  const MAX_PARTICLES = 260;
   const MAX_POPUPS = 40;
   const MAX_SPLASHES = 48;
 
@@ -28,6 +47,14 @@
     grain: '#a68d69',
     // wet soil: damp brown-olive, turning grassy where it was soaked for long
     damp: [122, 114, 78], grass: [118, 140, 86],
+    // living grass (render-only greenery layer). Warmer and darker than RD.Flora's leaf greens so
+    // young plants stay readable on a lush carpet. Carpet tones by growth: fresh olive -> deep lush.
+    carpet: ['#8a8e50', '#738842', '#5f813c', '#4f7b37'],
+    carpetL: ['#959a58', '#7e9349', '#6a8c42', '#5a873d'],
+    // blades [dark, light] for young and mature grass
+    blades: [['#6f8a3f', '#9cad5c'], ['#56783a', '#88a853'], ['#40672c', '#76a04a']],   // young, mid, mature
+    clover: '#5f9a4c', cloverL: '#7db363',
+    wild: ['#f4efe1', '#f3dc7e', '#eeb5c3', '#c3b0e3'], wildC: '#e2a23c',
     // cloud: full (0) -> empty (1)
     cloudL0: '#f5f1ea', cloudL1: '#a9adba',
     cloudS0: '#c9cbd8', cloudS1: '#7b8193',
@@ -44,6 +71,7 @@
   let wetL = null;             // wet soil layer (see createWet)
   let particles = [], popups = [], drops = [], splashes = [];
   let lastRun = null;
+  let frozenEvents = false;     // events of a frozen (finished) run were already handled
   let clock = 0;
 
   // ---------- helpers ----------
@@ -242,7 +270,8 @@
   }
 
   // ---------- wet soil (low-res grid, drawn scaled with smoothing) ----------
-  // wet: 0..1 dampness (fades slowly); soak: 0..1 grass tint from long watering (fades very slowly).
+  // wet: 0..1 dampness (fades slowly); soak: 0..1 grass growth from watering (never fades during a run;
+  // drawn as living grass by drawGreen, plus a light tint in drawWet).
   function createWet(w, h, cell) {
     cell = cell || CELL;
     const gw = Math.max(1, Math.ceil(w / cell)), gh = Math.max(1, Math.ceil(h / cell));
@@ -252,7 +281,8 @@
     return { cell: cell, gw: gw, gh: gh, wet: new Float32Array(gw * gh), soak: new Float32Array(gw * gh), cv: cv, g: g, img: g.createImageData(gw, gh) };
   }
   // Adds wetness (and slowly grass tint) in a disc, softer toward the rim so the patch has no hard edge.
-  function wetDisc(L, cx, cy, rr, amount) {
+  // noSoak: only dampen (the game drives the grass from run.soil instead).
+  function wetDisc(L, cx, cy, rr, amount, noSoak) {
     const cell = L.cell, gw = L.gw, gh = L.gh, wet = L.wet, soak = L.soak;
     const x0 = Math.max(0, Math.floor((cx - rr) / cell)), x1 = Math.min(gw - 1, Math.floor((cx + rr) / cell));
     const y0 = Math.max(0, Math.floor((cy - rr) / cell)), y1 = Math.min(gh - 1, Math.floor((cy + rr) / cell));
@@ -264,10 +294,10 @@
           // Wetness rises toward a radial cap, so even a long soak keeps a round, soft rim
           const R = rr + cell * 0.5, cap = Math.min(1, 1.6 * (1 - (d / R) * (d / R)));
           if (wet[k] < cap) wet[k] = Math.min(cap, wet[k] + amount * (1 - 0.5 * d / (rr + cell)));
-          // Grass tint grows on soaked soil toward a radial cap (full at the centre, none at the rim),
-          // so long watering leaves a round, soft-edged patch instead of a blocky one
-          const f = 1 - (d / rr) * (d / rr);
-          if (f > 0 && wet[k] > 0.5 && soak[k] < f) soak[k] = Math.min(f, soak[k] + amount * SOAK_PER_WET);
+          // Grass grows on damp soil, fastest at the centre and slower toward the rim, so a patch
+          // turns lush from the middle outward with soft, organic edges
+          const q = d / R;
+          if (!noSoak && wet[k] > SOAK_WET_MIN && soak[k] < 1) soak[k] = Math.min(1, soak[k] + amount * SOAK_PER_WET * (1 - 0.55 * q * q));
         }
       }
     }
@@ -278,16 +308,19 @@
     const d0 = P.damp, g0 = P.grass;
     const gw = L.gw, n = wet.length;
     let any = false;
-    // Pass 1: both fade over time (the grass tint only once the soil has dried a bit)
+    const decay = (L.decay || WET_DECAY) * dt;
+    // Pass 1: dampness fades over time; grass (soak) stays for the rest of the run
     for (let k = 0; k < n; k++) {
-      let v = wet[k], s = soak[k];
-      if (v <= 0 && s <= 0) continue;
+      const v = wet[k];
+      if (v <= 0 && soak[k] <= 0) continue;
       any = true;
-      if (s > 0 && v < 0.5) s = Math.max(0, s - SOAK_DECAY * dt);
-      if (v > 0) v = Math.max(0, v - WET_DECAY * dt);
-      wet[k] = v; soak[k] = s;
+      if (v > 0) wet[k] = Math.max(0, v - decay);
     }
     if (!any) return false;
+    if (!L.soilDriven) {
+      L.spT = (L.spT || 0) + dt;
+      if (L.spT >= SPREAD_TICK) { spreadSoak(L, L.spT); L.spT = 0; }
+    }
     // Pass 2: pixels from a 5-tap average (rounds off the grid's blocky corners)
     for (let k = 0; k < n; k++) {
       const x = k % gw, l = x > 0 ? k - 1 : k, r = x < gw - 1 ? k + 1 : k;
@@ -310,11 +343,343 @@
     return true;
   }
 
-  function buildWet() { wetL = createWet(W, H, CELL); }
+  // Lush cells slowly seed their neighbours: a cell next to grass grows toward (neighbour - SPREAD_DROP),
+  // so greenery creeps out a cell or two over a run and then stops on its own.
+  function spreadSoak(L, dt) {
+    const soak = L.soak, gw = L.gw, n = soak.length, step = SPREAD_RATE * dt;
+    for (let k = 0; k < n; k++) {
+      const s = soak[k];
+      if (s >= 1 - SPREAD_DROP) continue;
+      const x = k % gw;
+      let m = 0;
+      if (x > 0 && soak[k - 1] > m) m = soak[k - 1];
+      if (x < gw - 1 && soak[k + 1] > m) m = soak[k + 1];
+      if (k >= gw && soak[k - gw] > m) m = soak[k - gw];
+      if (k + gw < n && soak[k + gw] > m) m = soak[k + gw];
+      if (m < SPREAD_FROM) continue;
+      const t = m - SPREAD_DROP;
+      if (s < t) soak[k] = Math.min(t, s + step);
+    }
+  }
 
-  function updateWet(dt, run) {
-    if (run && run.raining) wetDisc(wetL, run.cloud.x, run.cloud.y, run.rainRadius, WET_GAIN * dt);
+  // Clears dampness, grass and the greenery cache (new run).
+  function resetWet(L) {
+    L.wet.fill(0); L.soak.fill(0); L.spT = 0;
+    const gr = L.gr;
+    if (gr) {
+      gr.lvl.fill(0); gr.dirty.fill(0); gr.queue.length = 0; gr.t = 0; gr.any = false;
+      gr.g.setTransform(1, 0, 0, 1, 0, 0);
+      gr.g.clearRect(0, 0, gr.cv.width, gr.cv.height);
+    }
+  }
+
+  // ---------- living grass (cached flat-vector greenery over the wet soil) ----------
+  // Growth s = drawn level / GREEN_LEVELS (0..1) drives, per cell:
+  //   carpet ellipse (from 0.15)  -> tufts of pointed blades, one after another (0.22 .. 0.9)
+  //   -> clover leaves (0.6 .. 0.85, some cells) -> tiny wildflowers (0.8 .. 1, some cells).
+  // Everything scales from zero with s, so a level change only grows things a little: no popping.
+  // Grass tuft sprites: TUFT_VARIANTS shapes (the upper half taller) x TUFT_STEPS growth steps x 3 colour
+  // sets, pre-rendered once per dpr. A tuft is a small fan of pointed blades, dark and light alternating.
+  const TUFT_VARIANTS = 8, TUFT_STEPS = 16;
+  const TUFT_W = 26, TUFT_H = 14, TUFT_BX = 13, TUFT_BY = 13;   // sprite box and tuft base point, CSS px
+  const atlases = {};
+  function tuftAtlas(dpr) {
+    let A = atlases[dpr];
+    if (A) return A;
+    const sw = Math.ceil(TUFT_W * dpr), sh = Math.ceil(TUFT_H * dpr);
+    const cv = document.createElement('canvas');
+    cv.width = sw * TUFT_STEPS * 3; cv.height = sh * TUFT_VARIANTS;
+    const g = cv.getContext('2d'), r = rng(4242);
+    for (let v = 0; v < TUFT_VARIANTS; v++) {
+      const tall = v >= TUFT_VARIANTS / 2;
+      const n = 3 + Math.floor(r() * 3) + (tall ? 1 : 0), sp = 0.8 + r() * 0.5;
+      const H = tall ? 9 + r() * 2 : 6 + r() * 2.5;   // <= 11 px, so a cell's grass stays within GREEN_REACH
+      const bl = [];
+      for (let b = 0; b < n; b++) {
+        const f = b / (n - 1) - 0.5;
+        bl.push(f * 4 * sp, f * 1.25 + (r() - 0.5) * 0.3, (0.72 + r() * 0.28) * (1 - Math.abs(f) * 0.45));
+      }
+      for (let c = 0; c < 3; c++) {
+        for (let st = 0; st < TUFT_STEPS; st++) {
+          const gt = (st + 1) / TUFT_STEPS, hh = H * gt, hw = 0.6 + 0.7 * gt;
+          g.setTransform(dpr, 0, 0, dpr, (c * TUFT_STEPS + st) * sw, v * sh);
+          for (let tone = 0; tone < 2; tone++) {
+            g.fillStyle = P.blades[c][tone];
+            g.beginPath();
+            for (let b = tone; b < n; b += 2) {
+              const bx = TUFT_BX + bl[b * 3] * gt, a = bl[b * 3 + 1], len = hh * bl[b * 3 + 2], y = TUFT_BY;
+              const dx = Math.sin(a), dy = -Math.cos(a);
+              g.moveTo(bx - hw, y);
+              g.quadraticCurveTo(bx + dx * len * 0.5 - hw * 0.6, y + dy * len * 0.5, bx + dx * len, y + dy * len);
+              g.quadraticCurveTo(bx + dx * len * 0.5 + hw * 0.6, y + dy * len * 0.5, bx + hw, y);
+              g.closePath();
+            }
+            g.fill();
+          }
+        }
+      }
+    }
+    A = atlases[dpr] = { cv: cv, sw: sw, sh: sh };
+    return A;
+  }
+
+  function createGreen(L, dpr) {
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(L.gw * L.cell * dpr));
+    cv.height = Math.max(1, Math.round(L.gh * L.cell * dpr));
+    const tw = Math.ceil(L.gw / GREEN_TILE), th = Math.ceil(L.gh / GREEN_TILE);
+    L.gr = {
+      cv: cv, g: cv.getContext('2d'), dpr: dpr, tw: tw, th: th,
+      lvl: new Uint8Array(L.gw * L.gh), geo: new Array(L.gw * L.gh),
+      dirty: new Uint8Array(tw * th), queue: [], t: GREEN_TICK, any: false,
+    };
+    return L.gr;
+  }
+
+  // Seeded per-cell layout (positions, sizes, thresholds), computed once per cell and kept.
+  function cellGeo(L, k) {
+    const geo = L.gr.geo;
+    let o = geo[k];
+    if (o) return o;
+    const cell = L.cell, x0 = (k % L.gw) * cell, y0 = ((k / L.gw) | 0) * cell;
+    const r = rng(Math.imul(k + 1, 2654435761) ^ 0x5bd1e995);
+    o = {};
+    // carpet: one big rotated ellipse (neighbours overlap into a continuous, lumpy-edged carpet)
+    o.bx = x0 + cell * (0.4 + r() * 0.2); o.by = y0 + cell * (0.4 + r() * 0.2);
+    o.brx = cell * (0.82 + r() * 0.18); o.bry = o.brx * (0.72 + r() * 0.16); o.ba = (r() - 0.5) * 1.2;
+    // lighter top-left patch on the carpet (two-tone)
+    // (only on some cells and fairly large, so highlights merge into irregular sunlit areas, not a dot grid)
+    o.lx = o.bx - cell * (0.05 + r() * 0.2); o.ly = o.by - cell * (0.08 + r() * 0.15); o.lr = cell * (0.5 + r() * 0.3);
+    if (r() > 0.42) o.lr = 0;
+    // tufts: [x, y, threshold, variant]; the later ones use the taller variants -> denser clumps
+    o.tufts = [];
+    for (let t = 0; t < 5; t++) {
+      o.tufts.push([x0 + cell * (0.1 + r() * 0.8), y0 + cell * (0.32 + r() * 0.66), 0.22 + t * 0.11 + r() * 0.05,
+        (t >= 3 ? TUFT_VARIANTS / 2 : 0) + Math.floor(r() * TUFT_VARIANTS / 2)]);
+    }
+    o.tufts.sort(function (a, b) { return a[1] - b[1]; });
+    // clover (about a third of the cells) and a wildflower (about a quarter)
+    const cx = x0 + cell * (0.2 + r() * 0.6), cy = y0 + cell * (0.25 + r() * 0.55), ca = r() * 6.283, hasC = r() < 0.34;
+    o.cl = hasC ? [cx, cy, ca] : null;
+    const fx = x0 + cell * (0.2 + r() * 0.6), fy = y0 + cell * (0.25 + r() * 0.6), fa = r() * 6.283, fc = Math.floor(r() * 4), hasF = r() < 0.27;
+    o.fl = hasF ? [fx, fy, fa, fc] : null;
+    geo[k] = o;
+    return o;
+  }
+
+  function carpetOf(s) { return smooth01((s - 0.15) / 0.5); }
+
+  // Paints all grown cells in the inclusive cell range, in fixed passes (carpet, light patches, clover,
+  // dark blades, light blades, wildflowers), each batched by colour. Opaque fills only, so any tile
+  // repaint gives exactly the pixels a full repaint would.
+  const paintList = [];
+  function paintCells(g, L, ia, ib, ja, jb) {
+    const gr = L.gr, lvl = gr.lvl, gw = L.gw, list = paintList;
+    list.length = 0;
+    for (let j = ja; j <= jb; j++) for (let i = ia; i <= ib; i++) { const k = j * gw + i; if (lvl[k]) list.push(k); }
+    if (!list.length) return;
+    const LV = GREEN_LEVELS;
+    // Carpet + light patches, lusher buckets on top
+    for (let pass = 0; pass < 2; pass++) {
+      for (let b = 0; b < 4; b++) {
+        let open = false;
+        for (let q = 0; q < list.length; q++) {
+          const k = list[q], c = carpetOf(lvl[k] / LV);
+          if (c <= 0 || Math.min(3, (c * 4) | 0) !== b) continue;
+          const o = cellGeo(L, k);
+          let x, y, rx, ry;
+          if (pass === 0) { x = o.bx; y = o.by; rx = o.brx * c; ry = o.bry * c; }
+          else {
+            const e = smooth01((c - 0.4) / 0.6);
+            if (e <= 0 || !o.lr) continue;
+            x = o.lx; y = o.ly; rx = o.lr * e; ry = rx * 0.8;
+          }
+          if (!open) { g.beginPath(); open = true; }
+          g.moveTo(x + rx * Math.cos(o.ba), y + rx * Math.sin(o.ba));
+          g.ellipse(x, y, rx, ry, o.ba, 0, 6.283);
+        }
+        if (open) { g.fillStyle = (pass ? P.carpetL : P.carpet)[b]; g.fill(); }
+      }
+    }
+    // Blade tufts: one pre-rendered sprite each (variant x growth step x colour), cell rows top to bottom
+    const A = tuftAtlas(gr.dpr), dpr = gr.dpr, sw = A.sw / dpr, sh = A.sh / dpr;
+    for (let q = 0; q < list.length; q++) {
+      const k = list[q], s = lvl[k] / LV, col = s < 0.45 ? 0 : (s < 0.7 ? 1 : 2);
+      const tufts = cellGeo(L, k).tufts;
+      for (let t = 0; t < tufts.length; t++) {
+        const tf = tufts[t], step = Math.round(smooth01((s - tf[2]) / 0.3) * TUFT_STEPS) - 1;
+        if (step < 0) continue;
+        g.drawImage(A.cv, (col * TUFT_STEPS + step) * A.sw, tf[3] * A.sh, A.sw, A.sh,
+          Math.round((tf[0] - TUFT_BX) * dpr) / dpr, Math.round((tf[1] - TUFT_BY) * dpr) / dpr, sw, sh);
+      }
+    }
+    // Clover (over the blades so it reads): three round leaves + a lighter highlight dot on each
+    for (let pass = 0; pass < 2; pass++) {
+      let open = false;
+      for (let q = 0; q < list.length; q++) {
+        const k = list[q], o = cellGeo(L, k);
+        if (!o.cl) continue;
+        const e = smooth01((lvl[k] / LV - 0.6) / 0.25);
+        if (e <= 0) continue;
+        if (!open) { g.beginPath(); open = true; }
+        const c = o.cl, lr = 1.9 * e, dd = 1.7 * e;
+        for (let m = 0; m < 3; m++) {
+          const a = c[2] + m * 2.094;
+          let x = c[0] + Math.cos(a) * dd, y = c[1] + Math.sin(a) * dd * 0.85, rr = lr;
+          if (pass) { x -= lr * 0.25; y -= lr * 0.3; rr = lr * 0.45; }
+          g.moveTo(x + rr, y); g.arc(x, y, rr, 0, 6.283);
+        }
+      }
+      if (open) { g.fillStyle = pass ? P.cloverL : P.clover; g.fill(); }
+    }
+    // Wildflowers: five soft petals around a warm centre, small enough to stay below the real flowers
+    for (let pc = 0; pc < 5; pc++) {
+      let open = false;
+      for (let q = 0; q < list.length; q++) {
+        const k = list[q], o = cellGeo(L, k);
+        if (!o.fl || (pc < 4 && o.fl[3] !== pc)) continue;
+        const e = smooth01((lvl[k] / LV - 0.8) / 0.2);
+        if (e <= 0) continue;
+        if (!open) { g.beginPath(); open = true; }
+        const f = o.fl;
+        if (pc < 4) {
+          const pr = 1.25 * e, pd = 1.5 * e;
+          for (let m = 0; m < 5; m++) {
+            const a = f[2] + m * 1.2566, x = f[0] + Math.cos(a) * pd, y = f[1] + Math.sin(a) * pd;
+            g.moveTo(x + pr, y); g.arc(x, y, pr, 0, 6.283);
+          }
+        } else {
+          g.moveTo(f[0] + 0.95 * e, f[1]); g.arc(f[0], f[1], 0.95 * e, 0, 6.283);
+        }
+      }
+      if (open) { g.fillStyle = pc < 4 ? P.wild[pc] : P.wildC; g.fill(); }
+    }
+  }
+
+  // Repaints one tile: clear its (device-pixel aligned) rect, clip, paint every cell that can reach it.
+  function paintTile(L, t) {
+    const gr = L.gr, g = gr.g, dpr = gr.dpr, cell = L.cell, R = GREEN_REACH;
+    const ti = t % gr.tw, tj = (t / gr.tw) | 0;
+    const i0 = ti * GREEN_TILE, j0 = tj * GREEN_TILE;
+    const i1 = Math.min(L.gw, i0 + GREEN_TILE), j1 = Math.min(L.gh, j0 + GREEN_TILE);
+    const X0 = Math.round(i0 * cell * dpr), Y0 = Math.round(j0 * cell * dpr);
+    const X1 = i1 >= L.gw ? gr.cv.width : Math.round(i1 * cell * dpr);
+    const Y1 = j1 >= L.gh ? gr.cv.height : Math.round(j1 * cell * dpr);
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(X0, Y0, X1 - X0, Y1 - Y0);
+    g.save();
+    g.beginPath(); g.rect(X0, Y0, X1 - X0, Y1 - Y0); g.clip();
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    paintCells(g, L, Math.max(0, i0 - R), Math.min(L.gw - 1, i1 - 1 + R), Math.max(0, j0 - R), Math.min(L.gh - 1, j1 - 1 + R));
+    g.restore();
+  }
+
+  // Scans growth levels (every GREEN_TICK), queues the tiles touched by changed cells and repaints a few
+  // per frame (all of them when `all`), then blits the greenery layer onto g.
+  function drawGreen(g, L, dt, dpr, all) {
+    let gr = L.gr;
+    let fresh = false;
+    if (!gr || gr.dpr !== dpr) { gr = createGreen(L, dpr); fresh = true; }
+    gr.t += dt;
+    if (all || fresh || gr.t >= (L.tick || GREEN_TICK)) {
+      gr.t = 0;
+      const soak = L.soak, lvl = gr.lvl, gw = L.gw, gh = L.gh, n = soak.length, R = GREEN_REACH;
+      for (let k = 0; k < n; k++) {
+        const v = Math.min(GREEN_LEVELS, Math.floor(soak[k] * GREEN_LEVELS + 1e-4));
+        if (v === lvl[k]) continue;
+        lvl[k] = v;
+        if (v) gr.any = true;
+        const i = k % gw, j = (k / gw) | 0;
+        const ta = Math.floor(Math.max(0, i - R) / GREEN_TILE), tb = Math.floor(Math.min(gw - 1, i + R) / GREEN_TILE);
+        const ua = Math.floor(Math.max(0, j - R) / GREEN_TILE), ub = Math.floor(Math.min(gh - 1, j + R) / GREEN_TILE);
+        for (let u = ua; u <= ub; u++) for (let tx = ta; tx <= tb; tx++) {
+          const t = u * gr.tw + tx;
+          if (!gr.dirty[t]) { gr.dirty[t] = 1; gr.queue.push(t); }
+        }
+      }
+    }
+    // A rebuilt cache (resize mid-run) catches up over a few frames instead of freezing one frame
+    let budget = all ? Infinity : (gr.queue.length > 24 ? (L.burst || 10) : GREEN_TILES_PER_FRAME);
+    // Bursts are also capped by time (slow phones): at least 2 tiles, then stop after ~2 ms
+    const timed = !all && budget > GREEN_TILES_PER_FRAME, t0 = timed ? performance.now() : 0;
+    let done = 0;
+    while (gr.queue.length && budget-- > 0) {
+      if (timed && done >= GREEN_TILES_PER_FRAME && performance.now() - t0 > 2) break;
+      done++;
+      const t = gr.queue.shift();
+      gr.dirty[t] = 0;
+      paintTile(L, t);
+    }
+    if (gr.any) g.drawImage(gr.cv, 0, 0, L.gw * L.cell, L.gh * L.cell);
+  }
+
+  // Rebuilds the grid for a new size; keeps the overlapping dampness and grass so a resize mid-run
+  // (e.g. a phone's address bar collapsing) does not wipe the greenery. The cache is repainted.
+  function buildWet() {
+    const old = wetL;
+    wetL = createWet(W, H, CELL);
+    wetL.soilDriven = true;
+    wetL.decay = GAME_WET_DECAY;
+    if (!old) return;
+    const gw = Math.min(old.gw, wetL.gw), gh = Math.min(old.gh, wetL.gh);
+    for (let j = 0; j < gh; j++) for (let i = 0; i < gw; i++) {
+      wetL.wet[j * wetL.gw + i] = old.wet[j * old.gw + i];
+      wetL.soak[j * wetL.gw + i] = old.soak[j * old.gw + i];
+    }
+  }
+
+  // Grass follows the run's soil grid (CONTRACTS "Soil"): target level per render cell is the
+  // bilinear sample of clamp(soil / lushSoil, 0, 1), so the visuals match the level bar and grow faster
+  // with stronger rain. The displayed level eases up toward it (grass grows instead of popping) and
+  // never goes down during a run. Partly grown cells get a little seeded jitter for organic edges.
+  let soilT = 0;
+  function syncSoil(L, run, dt, force) {
+    const soil = run && run.soil;
+    if (!soil) return;
+    soilT += dt;
+    const tick = L.tick || GREEN_TICK;
+    if (!force && soilT < tick) return;
+    const step = force ? 1 : SOIL_GROW * soilT;
+    soilT = 0;
+    const g = run.greenCell || 32, sgw = run.gw, sgh = run.gh, lush = C.lushSoil || 8;
+    const cell = L.cell, gw = L.gw, gh = L.gh, soak = L.soak;
+    let nz = L.noise;
+    if (!nz || nz.length !== soak.length) {
+      nz = L.noise = new Float32Array(soak.length);
+      const r = rng(9173);
+      for (let k = 0; k < nz.length; k++) nz[k] = r() * 2 - 1;
+    }
+    for (let j = 0; j < gh; j++) {
+      let fy = ((j + 0.5) * cell) / g - 0.5;
+      fy = clamp(fy, 0, sgh - 1);
+      const y0 = fy | 0, y1 = Math.min(sgh - 1, y0 + 1), ty = fy - y0;
+      for (let i = 0; i < gw; i++) {
+        let fx = ((i + 0.5) * cell) / g - 0.5;
+        fx = clamp(fx, 0, sgw - 1);
+        const x0 = fx | 0, x1 = Math.min(sgw - 1, x0 + 1), tx = fx - x0;
+        const a = soil[y0 * sgw + x0], b = soil[y0 * sgw + x1], c = soil[y1 * sgw + x0], d = soil[y1 * sgw + x1];
+        let v = ((a + (b - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty) / lush;
+        if (v <= 0) continue;
+        if (v > 1) v = 1;
+        // Ease-out curve: a cell that just counted for the bar already shows a clear carpet
+        v = 1 - Math.pow(1 - v, 1.6);
+        const k = j * gw + i;
+        v = clamp(v + nz[k] * SOIL_EDGE_NOISE * 4 * v * (1 - v), 0, 1);
+        const s = soak[k];
+        if (v > s) soak[k] = Math.min(v, s + step);
+      }
+    }
+  }
+
+  function updateWet(dt, run, soilRun) {
+    if (run && run.raining) wetDisc(wetL, run.cloud.x, run.cloud.y, run.rainRadius, WET_GAIN * dt, true);
+    const sweeping = !!(soilRun && soilRun.sweep && !soilRun.sweep.done);
+    // During the victory wave the grass is scanned and repainted faster so it keeps up with the front
+    wetL.tick = sweeping ? 0.05 : GREEN_TICK;
+    wetL.burst = sweeping ? 16 : 10;
+    syncSoil(wetL, soilRun, dt, false);
     drawWet(ctx, wetL, dt);
+    drawGreen(ctx, wetL, dt, dpr);
   }
 
   // ---------- plants (flat vector flowers from RD.Flora) ----------
@@ -324,6 +689,22 @@
   const REB_OPEN = 0.25, REB_HOLD = 0.2, REB_CLOSE = 0.3;   // s: rebloom pop (sunflower)
   const REGROW_FLOOR = 0.6;     // after a rebloom the stem stays full; only the head regrows
   const SPAWN_POP = 0.35;       // s: new seedlings fade in
+  // Growing plants are drawn bigger so buds are easy to spot; the boost settles as the flower opens.
+  const GROW_BOOST = 1.3, BLOOM_BOOST = 1.12;
+  const START_GROWTH = 0.38;   // visual growth floor for growing plants (water 0 → recognisable bud)
+  // Breathing pulse on growing plants that are not being rained on (moving things catch the eye)
+  const PULSE_AMP = 0.07, PULSE_PERIOD = 1.4;
+  // Water ring at the base of a plant (same style as the boss rings), scaled to the plant
+  const RING_K = 0.34, RING_MIN = 11, DONE_FLASH = 0.5;
+  let reduceMotion = false;
+  try {
+    const mq = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)');
+    if (mq) {
+      reduceMotion = mq.matches;
+      const on = function (e) { reduceMotion = e.matches; };
+      if (mq.addEventListener) mq.addEventListener('change', on); else if (mq.addListener) mq.addListener(on);
+    }
+  } catch (e) { /* no matchMedia */ }
 
   // Per-plant visual state by plant id. Bloomed plants are removed by Run after bloomLinger, which is
   // shorter than open + fade, so the record keeps drawing them ("ghost") until the fade ends.
@@ -335,20 +716,52 @@
     return !!(run && run.raining && Math.hypot(p.x - run.cloud.x, p.y - run.cloud.y) <= run.rainRadius);
   }
 
+  // Is (x, y) inside the dry ring of a tulip-queen arm that is being watered right now?
+  function inDryRing(x, y, run) {
+    const boss = run.boss;
+    if (!boss || boss.kind !== 'arms' || !run.level) return false;
+    const R = run.level.boss.dryRadius || 80;
+    for (let i = 0; i < boss.parts.length; i++) {
+      const q = boss.parts[i];
+      if (q.wet && !q.done && Math.hypot(q.x - x, q.y - y) < R) return true;
+    }
+    return false;
+  }
+
   function updatePlants(dt, run) {
     for (const r of recs.values()) r.seen = false;
     for (let i = 0; i < run.plants.length; i++) {
       const p = run.plants[i];
       let r = recs.get(p.id);
-      if (!r) { r = { p: p, seen: true, bloomT: -1, reb: -1, regrow: false, peak: 0, wilt: 0, wet: false }; recs.set(p.id, r); }
+      if (!r) {
+        r = { p: p, seen: true, bloomT: -1, reb: -1, regrow: false, peak: 0, wilt: 0, wet: false,
+          pw: p.water, lose: 0, ringA: 0, pulse: 1, hold: false };
+        recs.set(p.id, r);
+      }
       r.p = p;
       r.seen = true;
       r.wet = inRain(p, run);
-      if (p.state === 'bloomed') r.bloomT = p.bloomAge;
+      if (p.state === 'bloomed') {
+        // A finished run is no longer updated (victory wave): the flower opens on its own clock and,
+        // after a boss win, stays in full bloom instead of fading.
+        if (run.over) r.bloomT = (r.bloomT < 0 ? p.bloomAge : r.bloomT) + dt;
+        else r.bloomT = p.bloomAge;
+        r.hold = !!(run.over && run.bossWin);
+      }
+      // Ring state: losing water (wilting / dried by a boss arm) turns it orange; fades in and out
+      const losing = p.state === 'growing' && !r.wet && p.water < r.pw - 1e-5;
+      r.lose += ((losing ? 1 : 0) - r.lose) * Math.min(1, dt * 8);
+      r.pw = p.water;
+      const showRing = p.state === 'growing' && (p.water > 0.001 || r.wet);
+      r.ringA += ((showRing ? 1 : 0) - r.ringA) * Math.min(1, dt * 6);
+      // Pulse amount: settles while the cloud rains on the plant
+      r.pulse += ((r.wet || reduceMotion ? 0 : 1) - r.pulse) * Math.min(1, dt * 5);
       if (r.reb >= 0) { r.reb += dt; if (r.reb >= REB_OPEN + REB_HOLD + REB_CLOSE) r.reb = -1; }
       // Thirsty flowers (CONFIG wilt) droop as they lose water outside the rain; eased so the
       // rain-circle edge does not flicker.
-      if (C.plants[p.type].wilt && p.state === 'growing') {
+      if (p.state === 'growing' && inDryRing(p.x, p.y, run)) {
+        r.wilt += (1 - r.wilt) * Math.min(1, dt * 3);   // dried by the boss arm next to it
+      } else if (C.plants[p.type].wilt && p.state === 'growing') {
         if (r.wet || p.water > r.peak) r.peak = p.water;
         const target = r.wet ? 0 : clamp((r.peak - p.water) / p.need * 2.5, 0, 1);
         r.wilt += (target - r.wilt) * Math.min(1, dt * 4);
@@ -382,12 +795,13 @@
     if (r.bloomT >= 0) {
       growth = 1;
       bloom = clamp(r.bloomT / BLOOM_OPEN, 0, 1);
-      const f = clamp((r.bloomT - BLOOM_OPEN) / C.bloomLinger, 0, 1);
+      const f = r.hold ? 0 : clamp((r.bloomT - BLOOM_OPEN) / C.bloomLinger, 0, 1);
       fade = 1 - f * f;
       if (fade <= 0.01) return;
     } else {
       const f = clamp(p.water / p.need, 0, 1);
-      growth = r.regrow ? REGROW_FLOOR + (1 - REGROW_FLOOR) * f : f;
+      // Unwatered plants already show as a small, typed bud (user: buds must be easy to spot), not a tiny sprout
+      growth = r.regrow ? REGROW_FLOOR + (1 - REGROW_FLOOR) * f : START_GROWTH + (1 - START_GROWTH) * f;
       if (r.reb >= 0) {
         const t = r.reb;
         if (t < REB_OPEN + REB_HOLD) { bloom = clamp(t / REB_OPEN, 0, 1); growth = 1; }
@@ -400,28 +814,64 @@
     // Gentle sway, slower and smaller when wilted; a light shiver while being rained on
     let sway = Math.sin(clock * (1.7 - 0.9 * w) + p.id * 1.37) * 0.035 * (1 - 0.5 * w);
     if (r.wet) sway += Math.sin(clock * 9 + p.id) * 0.02;
+    const base = PLANT_SIZE[p.type] || 50;
+    // Bigger while growing; eases down a little as the petals open
+    let size = base * (GROW_BOOST + (BLOOM_BOOST - GROW_BOOST) * bloom);
+    if (r.bloomT < 0 && r.reb < 0 && r.pulse > 0.001) {
+      // Soft breathing, own phase per plant; settles under the rain
+      size *= 1 + PULSE_AMP * r.pulse * Math.sin(clock * 6.2832 / PULSE_PERIOD + p.id * 2.39);
+    }
+    plantRing(r, base * GROW_BOOST);
     const o = floraOpts;
-    o.size = PLANT_SIZE[p.type] || 50;
+    o.size = size;
     o.growth = growth; o.bloom = bloom; o.fade = fade; o.wilt = w; o.sway = sway; o.seed = p.id;
     if (RD.Flora) RD.Flora.draw(ctx, p.type, p.x, p.y, o);
+  }
 
-    if (r.wet && r.bloomT < 0 && r.reb < 0 && growth > 0.01 && growth < 1) {
-      // Small, subtle progress ring under the plant while it is being watered
-      const g = clamp(p.water / p.need, 0, 1);
-      const ry = p.y + 7, rr = 3.6;
-      ctx.lineWidth = 1.6; ctx.lineCap = 'round';
-      ctx.strokeStyle = 'rgba(30,24,36,0.22)';
-      ctx.beginPath(); ctx.arc(p.x, ry, rr, 0, 7); ctx.stroke();
-      ctx.strokeStyle = 'rgba(169,214,245,0.85)';
-      ctx.beginPath(); ctx.arc(p.x, ry, rr, -Math.PI / 2, -Math.PI / 2 + g * Math.PI * 2); ctx.stroke();
+  // Water ring at the plant's base (boss ring style): blue fills with water, orange while losing it,
+  // a short gold flash when the plant blooms.
+  function plantRing(r, size) {
+    const p = r.p, rx = Math.max(RING_MIN, size * RING_K), y = p.y + 3;
+    if (r.bloomT >= 0 || r.reb >= 0) {
+      const t = r.bloomT >= 0 ? r.bloomT : r.reb;
+      if (t >= DONE_FLASH) return;
+      const f = t / DONE_FLASH;
+      ctx.globalAlpha = 1 - f * f;
+      ctx.lineCap = 'round';
+      ctx.lineWidth = 2.6 * (1 - f * 0.5);
+      ctx.strokeStyle = BP.ringDone;
+      const R = rx * (1 + 0.35 * f);
+      ctx.beginPath(); ctx.ellipse(p.x, y, R, R * 0.4, 0, 0, 6.283); ctx.stroke();
+      ctx.globalAlpha = 1;
+      return;
     }
+    const a = r.ringA;
+    if (a < 0.02) return;
+    const frac = clamp(p.water / p.need, 0, 1);
+    // Calm when idle, full strength while rained on or losing water
+    ctx.globalAlpha = a * (r.wet || r.lose > 0.5 ? 1 : 0.85);
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 2.4;
+    ctx.strokeStyle = BP.ringBg;
+    ctx.beginPath(); ctx.ellipse(p.x, y, rx, rx * 0.4, 0, 0, 6.283); ctx.stroke();
+    if (frac > 0.005) {
+      // Fills from the front (the part the plant does not hide) around both sides to the back
+      ctx.lineWidth = 2.8;
+      ctx.strokeStyle = r.lose > 0.5 ? BP.ringLose : BP.ringWater;
+      ctx.beginPath(); ctx.ellipse(p.x, y, rx, rx * 0.4, 0, Math.PI / 2 - frac * Math.PI, Math.PI / 2 + frac * Math.PI); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
   }
 
   function drawPlants() {
     drawList.length = 0;
     for (const r of recs.values()) drawList.push(r);
+    if (B) for (let i = 0; i < B.parts.length; i++) drawList.push(B.parts[i]);
     drawList.sort(function (a, b) { return a.p.y - b.p.y; });
-    for (let i = 0; i < drawList.length; i++) drawPlant(drawList[i]);
+    for (let i = 0; i < drawList.length; i++) {
+      const r = drawList[i];
+      if (r.isBoss) drawBossPart(r); else drawPlant(r);
+    }
   }
 
   // ---------- cloud (flat vector: light lobes over a flat lower shade band, small crescent highlight) ----------
@@ -555,34 +1005,522 @@
     stepRain(ctx, drops, dt, run.cloud.x, run.cloud.y, run.rainRadius, top, onRainHit);
   }
 
+  // ---------- boss flower (PRD §12) ----------
+  // Ground decals (cracks, roots, rings, thorn vines) are drawn before the plants; the boss bodies join
+  // the plants' y-sorted draw list; gauges that must stay readable under the cloud are drawn after it.
+  // All visual state is derived from run.boss every frame (events only add bursts/popups).
+  const BOSS_SIZE = { arms: 96, shield: 104, shade: 112 };
+  const BOSS_ENTER = 0.9;        // s: plant shoots up after the spawn
+  const BOSS_FLOOR = 0.55;       // displayed growth at 0 water, so a boss looks big from the start
+  const VINE_N = 14, VINE_PTS = 9;
+  const BP = {
+    root: '#6e5236', rootL: '#8f7150', rootOn: '#6f9a52',
+    mound: '#9a7f5c', moundL: '#ad9370',
+    dry: '#8a5a2e', dryFill: 'rgba(140,96,52,', flake: '#a07a4a',
+    vine: '#4a6634', vineL: '#6d8a4a', thorn: '#6b4a2e', thornHot: '#c0533a', leaf: '#5f8a45',
+    ringBg: 'rgba(30,24,36,0.28)', ringWater: '#a9d6f5', ringLose: '#e9a15a', ringDone: '#f4c35c',
+    heat0: '#f3d27c', heat1: '#e0603a',
+  };
+  const PETAL_COLS = ['#f6bf34', '#fbf7ee', '#e0617f', '#ea7a4a', '#ad8fdb', '#97d68b'];
+  const MAX_PETALS = 360, MAX_RINGS = 40;
+  let petals = [], rings = [];
+  let shakeT = 0, shakeDur = 0.3, shakeAmp = 0;
+  let B = null;                  // render state of the current boss
+  const bossList = [];
+
+  function eBack(t) { const u = t - 1; return 1 + 2.70158 * u * u * u + 1.70158 * u * u; }
+  function shake(amp, dur) { if (amp >= shakeAmp * (shakeT / shakeDur || 0)) { shakeAmp = amp; shakeDur = dur; shakeT = dur; } }
+
+  function initBoss(run) {
+    const boss = run.boss, cfg = run.level ? run.level.boss : {}, r = rng(((boss.x * 13 + boss.y * 7) | 0) + 99);
+    B = { boss: boss, cfg: cfg, kind: boss.kind, parts: [], vines: [], blockT: 0, scorchA: 0, wilt: 0, lean: 0, openA: 0 };
+    for (let i = 0; i < boss.parts.length; i++) {
+      const q = boss.parts[i], cracks = [];
+      for (let k = 0; k < 7; k++) {
+        const a = k * 0.898 + r() * 0.5;
+        const c = crackPoints(r, q.x + Math.cos(a) * 10, q.y + Math.sin(a) * 6, a, 3, 10 + r() * 7);
+        cracks.push({ xs: c.xs, ys: c.ys, wd: 1.6 + r() * 1.2 });
+      }
+      // Root from the boss centre to each arm: a gentle curve with a random side bend
+      const dx = q.x - boss.x, dy = q.y - boss.y, bend = (r() - 0.5) * 0.6;
+      B.parts.push({ q: q, cracks: cracks, peak: 0, wilt: 0, doneT: -1, dryA: 0, seed: 7000 + i * 31, flakeT: 0,
+        cx: boss.x + dx * 0.5 - dy * bend, cy: boss.y + dy * 0.5 + dx * bend, len: Math.hypot(dx, dy) * 1.1,
+        p: { y: q.y }, isBoss: true });
+    }
+    if (boss.kind === 'shield') {
+      const R = cfg.shieldRadius || 110;
+      for (let i = 0; i < VINE_N; i++) {
+        const a0 = i * 6.283 / VINE_N + (r() - 0.5) * 0.15, span = 6.283 / VINE_N * 1.3;
+        const xs = [], ys = [], th = [];
+        for (let k = 0; k < VINE_PTS; k++) {
+          const a = a0 + span * k / (VINE_PTS - 1), rad = R + Math.sin(k * 1.3 + i * 2.1) * 5 + (r() - 0.5) * 4;
+          xs.push(Math.cos(a)); ys.push(Math.sin(a)); th.push(rad);
+        }
+        // Retract order is scrambled so the ring breaks up unevenly as the soil greens
+        B.vines.push({ xs: xs, ys: ys, rad: th, at: ((i * 5) % VINE_N) / VINE_N * 0.8, side: i & 1 });
+      }
+    }
+  }
+
+  function syncBoss(run, dt) {
+    if (!run || !run.boss) { B = null; return; }
+    if (!B || B.boss !== run.boss) initBoss(run);
+    const boss = run.boss, k = Math.min(1, dt * 4);
+    for (let i = 0; i < B.parts.length; i++) {
+      const bp = B.parts[i], q = bp.q;
+      bp.p.y = q.y;
+      if (q.done && bp.doneT < 0) bp.doneT = clock;
+      // Unwatered arms droop as they lose water (relative to the best they had)
+      let target = 0;
+      if (q.wet || q.water > bp.peak) bp.peak = q.water;
+      if (B.kind === 'arms' && !q.wet && !q.done) target = clamp((bp.peak - q.water) / q.need * 3, 0, 1);
+      bp.wilt += (target - bp.wilt) * k;
+      bp.dryA += ((B.kind === 'arms' && q.wet ? 1 : 0) - bp.dryA) * Math.min(1, dt * 5);
+    }
+    if (B.blockT > 0) B.blockT = Math.max(0, B.blockT - dt);
+    if (B.kind === 'shield') B.openA += ((boss.shield >= 1 ? 1 : 0) - B.openA) * Math.min(1, dt * 3);
+    if (B.kind === 'shade') {
+      const heat = clamp(boss.shade / (B.cfg.shadeMax || 1), 0, 1);
+      B.wilt += ((boss.scorched ? 1 : heat * 0.35) - B.wilt) * Math.min(1, dt * 3);
+      B.scorchA += ((boss.scorched ? 1 : 0) - B.scorchA) * Math.min(1, dt * 4);
+      // Leans away from the cloud while it shades the flower (it wants the sun)
+      const q = boss.parts[0], dx = run.cloud.x - q.x;
+      const over = clamp(1 - Math.abs(dx) / 160, 0, 1) * (q.wet || boss.shade > 0 ? 1 : 0);
+      const want = -(dx >= 0 ? 1 : -1) * 0.18 * Math.max(heat, over * 0.5);
+      B.lean += (want - B.lean) * Math.min(1, dt * 3);
+    }
+    // Dry flakes blown out of the ring around a watered arm
+    if (B.kind === 'arms') {
+      const R = B.cfg.dryRadius || 80;
+      for (let i = 0; i < B.parts.length; i++) {
+        const bp = B.parts[i];
+        if (bp.dryA < 0.5) continue;
+        bp.flakeT -= dt;
+        if (bp.flakeT > 0 || particles.length >= MAX_PARTICLES) continue;
+        bp.flakeT = 0.06;
+        const a = Math.random() * 6.283, d = R * (0.3 + Math.random() * 0.65);
+        particles.push({ x: bp.q.x + Math.cos(a) * d, y: bp.q.y + Math.sin(a) * d * 0.8, vx: Math.cos(a) * 30, vy: -18 - Math.random() * 12,
+          age: 0, life: 0.6, r: 1.4 + Math.random(), color: BP.flake, g: 40 });
+      }
+    }
+  }
+
+  function bossEnter(boss) { return boss.t >= BOSS_ENTER ? 1 : clamp(boss.t / BOSS_ENTER, 0, 1); }
+
+  // Thin ground ring under a boss part: water progress (blue), losing water (orange), done (gold).
+  function partRing(x, y, frac, losing, done, rx) {
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 3.2;
+    ctx.strokeStyle = BP.ringBg;
+    ctx.beginPath(); ctx.ellipse(x, y, rx, rx * 0.4, 0, 0, 6.283); ctx.stroke();
+    if (frac <= 0.005 && !done) return;
+    ctx.strokeStyle = done ? BP.ringDone : (losing ? BP.ringLose : BP.ringWater);
+    ctx.beginPath(); ctx.ellipse(x, y, rx, rx * 0.4, 0, -Math.PI / 2, -Math.PI / 2 + (done ? 1 : frac) * 6.283); ctx.stroke();
+  }
+
+  function drawVines(boss) {
+    const s = clamp(boss.shield, 0, 1), x0 = boss.x, y0 = boss.y;
+    const hot = B.blockT > 0;
+    for (let pass = 0; pass < 3; pass++) {
+      ctx.beginPath();
+      for (let i = 0; i < B.vines.length; i++) {
+        const v = B.vines[i];
+        const L = 1 - smooth01((s - v.at) / 0.22);
+        if (L <= 0.02) continue;
+        const n = Math.max(2, Math.round(L * (VINE_PTS - 1)) + 1);
+        const wob = hot ? Math.sin(clock * 50 + i) * 1.5 : 0;
+        if (pass < 2) {
+          for (let k = 0; k < n; k++) {
+            const rr = v.rad[k] + wob, px = x0 + v.xs[k] * rr, py = y0 + v.ys[k] * rr;
+            if (k === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+          }
+        } else {
+          // Thorns: small triangles pointing alternately out and in, plus a leaf every few points
+          for (let k = 1; k < n; k++) {
+            const rr = v.rad[k] + wob, px = x0 + v.xs[k] * rr, py = y0 + v.ys[k] * rr;
+            const sgn = (k + v.side) & 1 ? 1 : -1, nx = v.xs[k] * sgn, ny = v.ys[k] * sgn;
+            const tx = -v.ys[k], ty = v.xs[k];
+            ctx.moveTo(px + tx * 3, py + ty * 3);
+            ctx.lineTo(px + nx * 9.5, py + ny * 9.5);
+            ctx.lineTo(px - tx * 3, py - ty * 3);
+            ctx.closePath();
+          }
+        }
+      }
+      if (pass === 0) { ctx.strokeStyle = BP.vine; ctx.lineWidth = 7.5; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.stroke(); }
+      else if (pass === 1) { ctx.strokeStyle = BP.vineL; ctx.lineWidth = 2.6; ctx.stroke(); }
+      else { ctx.fillStyle = hot ? BP.thornHot : BP.thorn; ctx.fill(); }
+    }
+    // Leaves
+    ctx.fillStyle = BP.leaf;
+    ctx.beginPath();
+    for (let i = 0; i < B.vines.length; i++) {
+      const v = B.vines[i];
+      const L = 1 - smooth01((s - v.at) / 0.22);
+      if (L < 0.6) continue;
+      const k = 4, rr = v.rad[k], px = x0 + v.xs[k] * rr, py = y0 + v.ys[k] * rr;
+      const a = Math.atan2(v.ys[k], v.xs[k]) + (v.side ? 0.9 : -0.9);
+      ctx.moveTo(px + Math.cos(a) * 7, py + Math.sin(a) * 7);
+      ctx.ellipse(px + Math.cos(a) * 3.5, py + Math.sin(a) * 3.5, 6 * L, 2.8 * L, a, 0, 6.283);
+    }
+    ctx.fill();
+  }
+
+  // Ground layer of the boss (before plants).
+  function drawBossDecals(run) {
+    if (!B) return;
+    const boss = run.boss, cfg = B.cfg, t = boss.t, ent = bossEnter(boss);
+    // Cracked ground burst under every part; stays faintly as a scar
+    const ca = t < 1.6 ? 1 : Math.max(0.4, 1 - (t - 1.6) / 1.5), cp = eBack(clamp(t / 0.35, 0, 1));
+    ctx.globalAlpha = ca;
+    for (let i = 0; i < B.parts.length; i++) {
+      const bp = B.parts[i], q = bp.q;
+      ctx.save();
+      ctx.translate(q.x, q.y); ctx.scale(cp, cp); ctx.translate(-q.x, -q.y);
+      ctx.fillStyle = P.crackLip;
+      ctx.beginPath();
+      for (let k = 0; k < bp.cracks.length; k++) { const c = bp.cracks[k]; ctx.save(); ctx.translate(0.6, 1.3); crackShape(ctx, c.xs, c.ys, c.wd); ctx.restore(); }
+      ctx.fill();
+      ctx.fillStyle = P.crack;
+      ctx.beginPath();
+      for (let k = 0; k < bp.cracks.length; k++) { const c = bp.cracks[k]; crackShape(ctx, c.xs, c.ys, c.wd); }
+      ctx.fill();
+      ctx.restore();
+      // Soil mound the plant grows from
+      ctx.fillStyle = BP.mound;
+      ctx.beginPath(); ctx.ellipse(q.x, q.y + 1, 22 * ent, 8 * ent, 0, 0, 6.283); ctx.fill();
+      ctx.fillStyle = BP.moundL;
+      ctx.beginPath(); ctx.ellipse(q.x - 4, q.y - 1, 13 * ent, 4.5 * ent, 0, 0, 6.283); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    if (B.kind === 'arms') {
+      // Roots linking the arms to the queen's heart in the middle (green once that arm is done)
+      ctx.lineCap = 'round';
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < B.parts.length; i++) {
+          const bp = B.parts[i], q = bp.q;
+          ctx.strokeStyle = pass ? BP.rootL : (q.done ? BP.rootOn : BP.root);
+          ctx.lineWidth = pass ? 1.6 : 4.5;
+          ctx.setLineDash([bp.len * ent, 9999]);
+          ctx.beginPath(); ctx.moveTo(boss.x, boss.y); ctx.quadraticCurveTo(bp.cx, bp.cy, q.x, q.y); ctx.stroke();
+        }
+      }
+      ctx.setLineDash([]);
+      ctx.fillStyle = BP.root;
+      ctx.beginPath(); ctx.ellipse(boss.x, boss.y, 14 * ent, 7 * ent, 0, 0, 6.283); ctx.fill();
+      ctx.fillStyle = BP.rootL;
+      ctx.beginPath(); ctx.ellipse(boss.x - 3, boss.y - 2, 7 * ent, 3 * ent, 0, 0, 6.283); ctx.fill();
+      // Dry ring spreading around an arm while it is watered (it dries the plants nearby)
+      const R = cfg.dryRadius || 80;
+      for (let i = 0; i < B.parts.length; i++) {
+        const bp = B.parts[i], q = bp.q, a = bp.dryA;
+        if (a < 0.02) continue;
+        ctx.fillStyle = BP.dryFill + (0.2 * a).toFixed(3) + ')';
+        ctx.beginPath(); ctx.arc(q.x, q.y, R, 0, 6.283); ctx.fill();
+        ctx.strokeStyle = BP.dry;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        for (let w = 0; w < 2; w++) {
+          const ph = (clock * 0.8 + w * 0.5) % 1;
+          ctx.globalAlpha = a * (1 - ph) * 0.8;
+          ctx.beginPath(); ctx.arc(q.x, q.y, R * (0.25 + 0.75 * ph), 0, 6.283); ctx.stroke();
+        }
+        ctx.setLineDash([]);
+        ctx.globalAlpha = a * 0.55;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(q.x, q.y, R, 0, 6.283); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    } else if (B.kind === 'shield') {
+      const R = cfg.shieldRadius || 110, s = clamp(boss.shield, 0, 1), fade = 1 - B.openA;
+      if (fade > 0.02) {
+        // The circle that needs greening: subtle dashed ring + green progress arc along it
+        ctx.globalAlpha = fade * ent;
+        ctx.strokeStyle = 'rgba(247,237,219,0.4)';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([6, 7]);
+        ctx.beginPath(); ctx.arc(boss.x, boss.y, R + 14, 0, 6.283); ctx.stroke();
+        ctx.setLineDash([]);
+        if (s > 0.005) {
+          ctx.strokeStyle = '#97d68b';
+          ctx.lineWidth = 3;
+          ctx.lineCap = 'round';
+          ctx.beginPath(); ctx.arc(boss.x, boss.y, R + 14, -Math.PI / 2, -Math.PI / 2 + s * 6.283); ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+      }
+      ctx.save();
+      ctx.translate(boss.x, boss.y); ctx.scale(ent, ent); ctx.translate(-boss.x, -boss.y);
+      drawVines(boss);
+      ctx.restore();
+    }
+
+    // Water progress rings at the base of every part
+    for (let i = 0; i < B.parts.length; i++) {
+      const bp = B.parts[i], q = bp.q;
+      const losing = B.kind === 'arms' ? (!q.wet && q.water < bp.peak - 0.05) : (B.kind === 'shade' && boss.scorched);
+      partRing(q.x, q.y + 4, clamp(q.water / q.need, 0, 1), losing, q.done, 26 * ent);
+    }
+  }
+
+  // A boss body in the y-sorted plant list.
+  function drawBossPart(bp) {
+    const q = bp.q, boss = B.boss, ent = bossEnter(boss);
+    const f = clamp(q.water / q.need, 0, 1);
+    let size = BOSS_SIZE[B.kind] || 92, growth = BOSS_FLOOR + (1 - BOSS_FLOOR) * f, bloom = 0, wilt = bp.wilt, x = q.x;
+    if (q.done) {
+      const d = clock - bp.doneT;
+      growth = 1; bloom = clamp(d / 0.4, 0, 1); wilt = 0;
+      size *= 1 + 0.2 * Math.sin(Math.PI * clamp(d / 0.5, 0, 1));
+    }
+    if (ent < 1) { size *= Math.max(0.05, eBack(ent)); growth *= clamp(ent * 1.4, 0, 1); }
+    let sway = Math.sin(clock * 1.3 + bp.seed) * 0.03;
+    if (q.wet) sway += Math.sin(clock * 9 + bp.seed) * 0.02;
+    if (B.kind === 'shade') { sway += B.lean; wilt = q.done ? 0 : B.wilt; }
+    if (B.kind === 'shield' && B.blockT > 0) x += Math.sin(clock * 70) * 3 * (B.blockT / 0.35);
+    const o = floraOpts;
+    o.size = size; o.growth = growth; o.bloom = bloom; o.fade = 1; o.wilt = wilt; o.sway = sway; o.seed = bp.seed;
+    if (RD.Flora) RD.Flora.draw(ctx, B.boss.type, x, q.y, o);
+  }
+
+  // Readable on top of the cloud: the sunflower's heat gauge and heat shimmer.
+  function drawBossOverlay() {
+    if (!B || B.kind !== 'shade') return;
+    const boss = B.boss, q = boss.parts[0];
+    if (q.done) return;
+    const size = BOSS_SIZE.shade, ent = bossEnter(boss);
+    const heat = clamp(boss.shade / (B.cfg.shadeMax || 1), 0, 1);
+    const hx = q.x + Math.sin(B.lean) * size * 0.8, hy = q.y - size * 0.82 * ent;
+    // Heat shimmer: wavy lines rising off the head while scorched
+    if (B.scorchA > 0.02) {
+      ctx.strokeStyle = 'rgba(255,205,140,' + (0.65 * B.scorchA).toFixed(3) + ')';
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      for (let i = 0; i < 4; i++) {
+        const bx = hx - 27 + i * 18, ph = (clock * 1.4 + i * 0.27) % 1, y0 = hy - 18 - ph * 26;
+        for (let k = 0; k <= 8; k++) {
+          const y = y0 - k * 3.2, x = bx + Math.sin(clock * 6 + k * 0.9 + i) * 3;
+          if (k === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+      }
+      ctx.stroke();
+    }
+    // Heat gauge: small arc above the head (fills with shade; red and blinking when scorched)
+    if (heat <= 0.01 && !boss.scorched) return;
+    const gx = hx, gy = hy - 36, gr = 13;
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = 'rgba(21,17,43,0.7)';
+    ctx.beginPath(); ctx.arc(gx, gy, gr, Math.PI, 2 * Math.PI); ctx.stroke();
+    ctx.lineWidth = 3.2;
+    const blink = boss.scorched ? 0.55 + 0.45 * Math.sin(clock * 14) : 1;
+    ctx.globalAlpha = blink;
+    ctx.strokeStyle = mix(BP.heat0, BP.heat1, boss.scorched ? 1 : heat);
+    ctx.beginPath(); ctx.arc(gx, gy, gr, Math.PI, Math.PI + Math.max(0.05, boss.scorched ? 1 : heat) * Math.PI); ctx.stroke();
+    // Little sun in the middle
+    ctx.fillStyle = mix(BP.heat0, BP.heat1, heat);
+    ctx.beginPath(); ctx.arc(gx, gy - 1, 3.4, 0, 6.283); ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  function addPetals(x, y, n, cols, sp, up) {
+    for (let i = 0; i < n && petals.length < MAX_PETALS; i++) {
+      const a = Math.random() * 6.283, v = sp * (0.4 + Math.random() * 0.8);
+      petals.push({ x: x + (Math.random() - 0.5) * 16, y: y + (Math.random() - 0.5) * 16, vx: Math.cos(a) * v, vy: Math.sin(a) * v * 0.7 - up * (0.6 + Math.random() * 0.6),
+        rot: Math.random() * 6.283, vr: (Math.random() - 0.5) * 9, w: 2.4 + Math.random() * 1.8, h: 4.5 + Math.random() * 3,
+        age: 0, life: 1.4 + Math.random() * 1.1, color: cols[(Math.random() * cols.length) | 0] });
+    }
+  }
+  function addRing(x, y, r0, r1, life, color, w) {
+    if (rings.length < MAX_RINGS) rings.push({ x: x, y: y, r0: r0, r1: r1, age: 0, life: life, color: color, w: w });
+  }
+  function addDirt(x, y, n) {
+    for (let i = 0; i < n && particles.length < MAX_PARTICLES; i++) {
+      const a = -Math.PI * Math.random(), sp = 60 + Math.random() * 110;
+      particles.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, age: 0, life: 0.5 + Math.random() * 0.4,
+        r: 1.6 + Math.random() * 2, color: Math.random() < 0.5 ? P.crack : P.pebble, g: 420 });
+    }
+  }
+  function addPopup(x, y, text, opts) {
+    if (popups.length >= MAX_POPUPS) return;
+    const o = opts || {};
+    popups.push({ x: x, y: y, text: text, age: 0, life: o.life || 1.2, big: true, size: o.size, color: o.color, edge: o.edge });
+  }
+
+  function bossEvent(e, run) {
+    const boss = run.boss, col = boss ? (C.plants[boss.type] || {}).bloom || '#f4c35c' : '#f4c35c';
+    if (e.type === 'bossSpawn') {
+      const parts = boss ? boss.parts : [{ x: e.x, y: e.y }];
+      for (let i = 0; i < parts.length; i++) {
+        addRing(parts[i].x, parts[i].y, 6, 70, 0.6, '#f3e3c0', 4);
+        addRing(parts[i].x, parts[i].y, 4, 44, 0.45, P.crack, 3);
+        addDirt(parts[i].x, parts[i].y, 18);
+      }
+      shake(6, 0.4);
+    } else if (e.type === 'bossPart') {
+      addPetals(e.x, e.y - 60, 26, [col, col, '#f6a072', '#fbf7ee'], 150, 120);
+      addRing(e.x, e.y - 50, 10, 60, 0.5, col, 4);
+      if (boss) {
+        let n = 0;
+        for (let i = 0; i < boss.parts.length; i++) if (boss.parts[i].done) n++;
+        addPopup(e.x, e.y - 110, n + '/' + boss.parts.length, { size: 20, color: '#fbf7ee', edge: 'rgba(40,30,50,0.8)' });
+      }
+    } else if (e.type === 'bossBlocked') {
+      if (B) B.blockT = 0.35;
+      for (let i = 0; i < 10 && particles.length < MAX_PARTICLES; i++) {
+        const a = Math.random() * 6.283, sp = 60 + Math.random() * 80;
+        particles.push({ x: e.x, y: e.y - 40, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 30, age: 0, life: 0.35, r: 1.4 + Math.random(),
+          color: i & 1 ? BP.thornHot : '#fbe3c4', g: 200 });
+      }
+      addPopup(e.x, e.y - 112, 'Dikenler!', { size: 16, color: '#ffb4a2', edge: 'rgba(60,20,20,0.8)', life: 0.9 });
+      shake(2.5, 0.2);
+    } else if (e.type === 'bossScorch') {
+      for (let i = 0; i < 12 && particles.length < MAX_PARTICLES; i++) {
+        particles.push({ x: e.x + (Math.random() - 0.5) * 40, y: e.y - 70 - Math.random() * 20, vx: (Math.random() - 0.5) * 30, vy: -30 - Math.random() * 30,
+          age: 0, life: 0.9, r: 2 + Math.random() * 2, color: '#9a8a7a', g: -10 });
+      }
+      addPopup(e.x, e.y - 128, 'Yandı!', { size: 18, color: '#ffb27a', edge: 'rgba(70,30,10,0.8)' });
+      shake(3, 0.25);
+    } else if (e.type === 'bossWin') {
+      const cols = [col, col].concat(PETAL_COLS);
+      addPetals(e.x, e.y - 60, 110, cols, 260, 220);
+      if (boss) for (let i = 0; i < boss.parts.length; i++) addPetals(boss.parts[i].x, boss.parts[i].y - 60, 30, cols, 180, 160);
+      addRing(e.x, e.y - 40, 10, 150, 0.9, '#fbf7ee', 5);
+      addRing(e.x, e.y - 40, 6, 100, 0.7, col, 4);
+      addPopup(e.x, e.y - 150, '+' + e.coins, { size: 30, life: 2.2 });
+      shake(5, 0.35);
+    }
+  }
+
+  // ---------- victory wave (boss win, CONTRACTS "victory sweep") ----------
+  // A bright green front expands from the boss with radius run.sweep.r; the grass behind it grows in from
+  // run.soil (eased by syncSoil), leaves and petals are flung outward from the front.
+  const SW = { leaf: ['#7fbf55', '#5f9a4c', '#9fd27a', '#b6e08a'], edge: '#d9f5a8', wash: 'rgba(120,176,80,' };
+  let sweepRef = null, sweepFxT = 0;
+
+  function drawSweep(run, dt) {
+    const sw = run.sweep;
+    if (!sw || sw.done) return;
+    if (sweepRef !== sw) { sweepRef = sw; sweepFxT = 0; shake(5, 0.6); }
+    const x = sw.x, y = sw.y, r = sw.r;
+    if (r <= 1) return;
+    // Soft wash behind the front (fills in before the grass tiles catch up) + bright leading band.
+    // One radial gradient per frame: cheap, no blur.
+    const inner = Math.max(0, r - 90);
+    const gr = ctx.createRadialGradient(x, y, inner, x, y, r + 4);
+    gr.addColorStop(0, SW.wash + '0)');
+    gr.addColorStop(0.55, SW.wash + '0.16)');
+    gr.addColorStop(0.9, 'rgba(190,236,130,0.42)');
+    gr.addColorStop(1, 'rgba(190,236,130,0)');
+    ctx.fillStyle = gr;
+    ctx.beginPath(); ctx.arc(x, y, r + 4, 0, 6.283); ctx.fill();
+    // Crisp front lines (two widths, fading toward the end of the sweep)
+    const endF = clamp((sw.max - r) / 200, 0, 1);
+    ctx.lineCap = 'round';
+    ctx.globalAlpha = 0.35 * endF;
+    ctx.strokeStyle = SW.leaf[2];
+    ctx.lineWidth = 10;
+    ctx.beginPath(); ctx.arc(x, y, Math.max(1, r - 6), 0, 6.283); ctx.stroke();
+    ctx.globalAlpha = 0.85 * endF;
+    ctx.strokeStyle = SW.edge;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 6.283); ctx.stroke();
+    ctx.globalAlpha = 1;
+    // Leaves / petals flung outward from the visible part of the front
+    sweepFxT += dt;
+    const rate = 1 / 90;   // ~90 per second, capped by MAX_PETALS
+    let guard = 0;
+    while (sweepFxT >= rate && guard++ < 8) {
+      sweepFxT -= rate;
+      if (petals.length >= MAX_PETALS) break;
+      let px = 0, py = 0, a = 0, ok = false;
+      for (let t = 0; t < 4 && !ok; t++) {
+        a = Math.random() * 6.283;
+        px = x + Math.cos(a) * r; py = y + Math.sin(a) * r;
+        ok = px > -10 && px < W + 10 && py > -10 && py < H + 10;
+      }
+      if (!ok) continue;
+      const leaf = Math.random() < 0.65, v = 70 + Math.random() * 110;
+      petals.push({ x: px, y: py, vx: Math.cos(a) * v, vy: Math.sin(a) * v * 0.7 - 90 - Math.random() * 70,
+        rot: Math.random() * 6.283, vr: (Math.random() - 0.5) * 10, w: leaf ? 2.2 + Math.random() * 1.2 : 2 + Math.random() * 1.4,
+        h: leaf ? 5 + Math.random() * 3 : 3.5 + Math.random() * 2.5, age: 0, life: 0.9 + Math.random() * 0.7,
+        color: leaf ? SW.leaf[(Math.random() * SW.leaf.length) | 0] : PETAL_COLS[(Math.random() * PETAL_COLS.length) | 0] });
+    }
+  }
+
   // ---------- events / fx ----------
   function fmtCombo(c) { return '×' + (Math.round(c * 100) / 100); }
 
   function handleEvents(run) {
     for (const e of run.events) {
-      if (e.type !== 'bloom') continue;
-      const col = C.plants[e.plantType].bloom;
+      if (e.type !== 'bloom') { if (e.type.indexOf('boss') === 0) bossEvent(e, run); continue; }
+      const col = C.plants[e.plantType].bloom, ph = (PLANT_SIZE[e.plantType] || 50) * BLOOM_BOOST;
       for (let i = 0; i < 9 && particles.length < MAX_PARTICLES; i++) {
         const a = Math.random() * 6.283, sp = 40 + Math.random() * 60;
-        particles.push({ x: e.x, y: e.y - (PLANT_SIZE[e.plantType] || 50) * 0.8, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, age: 0, life: 0.55 + Math.random() * 0.3, r: 1.8 + Math.random() * 1.6, color: col, g: 220 });
+        particles.push({ x: e.x, y: e.y - ph * 0.8, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, age: 0, life: 0.55 + Math.random() * 0.3, r: 1.8 + Math.random() * 1.6, color: col, g: 220 });
       }
       if (e.rebloom) startRebloom(e, run);
-      if (popups.length < MAX_POPUPS) {
+      if (e.victory) {
+        // Victory wave bloom: petal pop + gold coin popup
+        addPetals(e.x, e.y - ph * 0.7, 10, [col, col, '#fbf7ee', '#f6bf34'], 120, 110);
+        addRing(e.x, e.y - ph * 0.6, 4, 34, 0.45, col, 3);
+        addPopup(e.x, e.y - ph - 12, '+' + e.coins, { size: 19, life: 1.3, color: '#ffd76a', edge: 'rgba(60,40,10,0.85)' });
+      } else if (popups.length < MAX_POPUPS) {
         const mul = e.mul > 1 ? ' ×' + (Math.round(e.mul * 100) / 100) : '';
-        popups.push({ x: e.x, y: e.y - (PLANT_SIZE[e.plantType] || 50) - 10, text: '+' + e.coins + mul + (e.combo > 1 ? ' ' + fmtCombo(e.combo) : ''), age: 0, life: 1.1, big: e.combo > 1 || !!mul });
+        popups.push({ x: e.x, y: e.y - ph - 10, text: '+' + e.coins + mul + (e.combo > 1 ? ' ' + fmtCombo(e.combo) : ''), age: 0, life: 1.1, big: e.combo > 1 || !!mul });
       }
-      if (e.refund > 0 && popups.length < MAX_POPUPS) {
+      if (e.refund > 0 && !e.victory && popups.length < MAX_POPUPS) {
         popups.push({ x: e.x + 14, y: e.y - 6, text: '+' + e.refund + ' su', age: 0, life: 1.0, big: false, color: '#a9d6f5', edge: 'rgba(20,40,70,0.8)' });
       }
-      // A bloom soaks the soil around it a bit
-      const L = wetL, ci = Math.floor(e.x / CELL), cj = Math.floor(e.y / CELL);
-      for (let j = cj - 1; j <= cj + 1; j++) for (let i = ci - 1; i <= ci + 1; i++) {
-        if (i >= 0 && j >= 0 && i < L.gw && j < L.gh) L.wet[j * L.gw + i] = Math.min(1, L.wet[j * L.gw + i] + 0.3);
+      // A bloom greens a patch around it (run.soil does the real work; this is the visible pop)
+      if (!e.victory) {
+        const R = (C.bloomGreen && C.bloomGreen.radius) || 44;
+        addRing(e.x, e.y, 6, R, 0.5, '#9fd27a', 3);
+        for (let i = 0; i < 8 && petals.length < MAX_PETALS; i++) {
+          const a = Math.random() * 6.283, d = R * (0.3 + Math.random() * 0.6), v = 30 + Math.random() * 40;
+          petals.push({ x: e.x + Math.cos(a) * d, y: e.y + Math.sin(a) * d * 0.6, vx: Math.cos(a) * v, vy: -40 - Math.random() * 40,
+            rot: Math.random() * 6.283, vr: (Math.random() - 0.5) * 8, w: 2 + Math.random(), h: 4.5 + Math.random() * 2,
+            age: 0, life: 0.6 + Math.random() * 0.3, color: SW.leaf[(Math.random() * SW.leaf.length) | 0] });
+        }
+        const L = wetL, ci = Math.floor(e.x / CELL), cj = Math.floor(e.y / CELL);
+        for (let j = cj - 2; j <= cj + 2; j++) for (let i = ci - 2; i <= ci + 2; i++) {
+          if (i >= 0 && j >= 0 && i < L.gw && j < L.gh) L.wet[j * L.gw + i] = Math.min(1, L.wet[j * L.gw + i] + 0.4);
+        }
       }
     }
   }
 
   function drawFx(dt) {
+    // Shock rings (ground bursts)
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const q = rings[i];
+      q.age += dt;
+      if (q.age >= q.life) { rings.splice(i, 1); continue; }
+      const f = q.age / q.life, e = 1 - (1 - f) * (1 - f);
+      ctx.globalAlpha = 1 - f;
+      ctx.strokeStyle = q.color;
+      ctx.lineWidth = q.w * (1 - f * 0.7);
+      const r = q.r0 + (q.r1 - q.r0) * e;
+      ctx.beginPath(); ctx.ellipse(q.x, q.y, r, r * 0.55, 0, 0, 6.283); ctx.stroke();
+    }
+    // Petal confetti: tumbling flat petals with a little air drag
+    for (let i = petals.length - 1; i >= 0; i--) {
+      const q = petals[i];
+      q.age += dt;
+      if (q.age >= q.life) { petals.splice(i, 1); continue; }
+      const drag = Math.max(0, 1 - 1.6 * dt);
+      q.vx *= drag; q.vy = q.vy * drag + 230 * dt;
+      q.x += q.vx * dt + Math.sin(clock * 3 + i) * 12 * dt;
+      q.y += q.vy * dt;
+      q.rot += q.vr * dt;
+      const f = q.age / q.life;
+      ctx.globalAlpha = f < 0.7 ? 1 : 1 - (f - 0.7) / 0.3;
+      ctx.fillStyle = q.color;
+      ctx.beginPath(); ctx.ellipse(q.x, q.y, q.w, q.h * Math.abs(Math.cos(q.rot * 0.7)) + 0.8, q.rot, 0, 6.283); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
     for (let i = particles.length - 1; i >= 0; i--) {
       const q = particles[i];
       q.age += dt;
@@ -604,9 +1542,9 @@
       if (q.age >= q.life) { popups.splice(i, 1); continue; }
       const f = q.age / q.life;
       ctx.globalAlpha = f < 0.6 ? 1 : 1 - (f - 0.6) / 0.4;
-      ctx.font = '700 ' + (q.big ? 17 : 15) + 'px Geist, "JetBrains Mono", system-ui, sans-serif';
+      ctx.font = '700 ' + (q.size || (q.big ? 17 : 15)) + 'px Geist, "JetBrains Mono", system-ui, sans-serif';
       const y = q.y - 26 * (1 - (1 - f) * (1 - f));
-      ctx.lineWidth = 3;
+      ctx.lineWidth = q.size > 20 ? 4 : 3;
       ctx.strokeStyle = q.edge || P.coinEdge;
       ctx.strokeText(q.text, q.x, y);
       ctx.fillStyle = q.color || P.coin;
@@ -648,28 +1586,50 @@
     if (!ctx) return;
     dt = clamp(dt || 0, 0, 0.05);
     clock += dt;
-    if (run !== lastRun) {
+    // After a boss run ends the results overlay is translucent: keep the final field (bloomed boss,
+    // celebration) frozen behind it instead of switching to the idle backdrop.
+    let scene = run, frozen = false;
+    if (!run && lastRun && lastRun.over && lastRun.boss && RD.game && RD.game.screen === 'results') { scene = lastRun; frozen = true; }
+    if (scene !== lastRun) {
       // New run (or back to idle): drop run-specific effects
-      if (run) { wetL.wet.fill(0); wetL.soak.fill(0); }
+      if (scene) resetWet(wetL);
       particles.length = 0; popups.length = 0; drops.length = 0; splashes.length = 0;
+      petals.length = 0; rings.length = 0; shakeT = 0; B = null;
       recs.clear(); drawList.length = 0;
-      lastRun = run;
+      sweepRef = null; soilT = 0;
+      lastRun = scene;
+      frozenEvents = false;
     }
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.drawImage(ground, 0, 0, W, H);
-    updateWet(dt, run);
+    let ox = 0, oy = 0;
+    if (shakeT > 0) {
+      shakeT = Math.max(0, shakeT - dt);
+      const a = shakeAmp * shakeT / shakeDur;
+      ox = (Math.random() - 0.5) * 2 * a; oy = (Math.random() - 0.5) * 2 * a;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, ox * dpr, oy * dpr);
+    if (ox || oy) ctx.drawImage(ground, -8, -8, W + 16, H + 16);
+    else ctx.drawImage(ground, 0, 0, W, H);
+    updateWet(dt, scene && !frozen ? scene : null, scene);
 
-    if (run) {
-      updatePlants(dt, run);
-      handleEvents(run);
-      const c = run.cloud;
-      drawTarget(ctx, c.x, c.y, run.rainRadius, run.raining);
+    if (scene) {
+      updatePlants(dt, scene);
+      syncBoss(scene, dt);
+      // A finished run is no longer updated, so its last events would repeat every frame
+      if (!frozen || !frozenEvents) handleEvents(scene);
+      if (frozen) frozenEvents = true;
+      const c = scene.cloud;
+      if (!frozen) drawSweep(scene, dt);
+      drawBossDecals(scene);
+      drawTarget(ctx, c.x, c.y, scene.rainRadius, scene.raining);
       drawPlants();
-      if (run.raining) drawRain(dt, run);
+      if (scene.raining) drawRain(dt, scene);
       stepSplashes(ctx, splashes, dt);
-      const low = run.tank > 0 ? 1 - run.water / run.tank : 1;
+      const low = scene.tank > 0 ? 1 - scene.water / scene.tank : 1;
       // Opaque on purpose: the two flat layers would show a seam if drawn translucent
-      drawCloud(c.x, c.y, c.r, low, run.raining ? 0.03 : 0.012);
+      drawCloud(c.x, c.y, c.r, low, scene.raining ? 0.03 : 0.012);
+      drawBossOverlay();
+      // Behind the results panel: no floating text (the celebration already played during the win hold)
+      if (frozen) popups.length = 0;
     } else {
       // Idle backdrop: one slowly drifting cloud
       const x = W * (0.5 + 0.32 * Math.sin(clock * 0.12));
@@ -685,6 +1645,7 @@
     art: {
       paintGround: paintGround,
       createWet: createWet, wetDisc: wetDisc, drawWet: drawWet,
+      drawGreen: drawGreen, resetWet: resetWet,   // drawGreen(ctx, L, dt, dpr, all): cached living grass
       drawCloud: drawCloudArt, cloudBottom: CLOUD_BOTTOM,
       drawTarget: drawTarget,
       stepRain: stepRain, stepSplashes: stepSplashes, addSplash: addSplash,

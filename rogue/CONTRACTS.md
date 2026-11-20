@@ -100,5 +100,23 @@ RD.Meta.settings and save; they apply on the next run start.
 - `js/flora.js` → `RD.Flora.draw(ctx, type, x, y, {size, growth, bloom, fade, wilt, sway, seed})`, `RD.Flora.icon(type, px)`.
   Plants are drawn from growth = water/need (sprout → stem → leaves → bud → bloom). No image assets.
 - `RD.Render.art` exposes pure helpers (paintGround, createWet, wetDisc, drawWet, drawCloud, cloudBottom, drawTarget,
-  stepRain, stepSplashes, addSplash) used by `flora-preview.html`. The cloud is a flat two-tone vector drawn high above its
+  stepRain, stepSplashes, addSplash, drawGreen, resetWet) used by `flora-preview.html`. The cloud is a flat two-tone vector drawn high above its
   rain target (cloudLift); the target has a ground shadow + dashed ring.
+
+## Levels + boss (2026-11-20, PRD §12)
+- `new RD.Run(stats, rules, field, ctx)`; ctx = { level: CONFIG.levels[i], flowers: {type:true} } from `RD.Meta.currentLevel()` / `unlockedFlowers()`.
+- Run fields for render/ui: `level` (cfg), `bar` 0..1, `barPoints`, `barTarget`, `greenCell`, `gw`, `gh`, `greened` (Uint8Array, 1 = cell counted),
+  `boss` = { kind 'arms'|'shield'|'shade', type (flower type), label, hint, x, y, t, parts:[{x,y,water,need,done,wet}],
+  shield (≥1 = down, rose), shade / scorched (sunflower) }, `bossWin`.
+- Events: `bossSpawn {x,y,label,hint,bossType}`, `bossPart {x,y}`, `bossBlocked {x,y}`, `bossScorch {x,y}`, `bossWin {x,y,coins,unlocks}`; end reason `'boss'`.
+- `result()` adds levelId, levelName, bar, bossReached, bossWin, unlocks.
+- Meta: `data.level` (highest unlocked; > levels.length = all cleared), `currentLevel()`, `allCleared()`, `unlockedFlowers()`, `flowerOfStat()`;
+  `recordRun(result)` advances the level on a boss win. Tree nodes whose stat belongs to a locked flower are hidden.
+
+## Soil, bloom greening, victory sweep (2026-11-20 b)
+- `run.soil` (Float32Array, gw×gh, cell = `run.greenCell` px) is the single source of truth for watered ground.
+  Rain adds `stats.rainRate × CONFIG.groundMul` per second (stronger rain greens faster); a bloom adds `CONFIG.bloomGreen.soil`
+  in `bloomGreen.radius`. Visual grass level per cell = clamp(soil / CONFIG.lushSoil, 0, 1). `run.greened[k]` = counted for the bar.
+- Boss win: `run.over` + `endReason 'boss'`, then main.js calls `run.victoryStep(dt)` each frame until it returns true.
+  `run.sweep = { x, y, r, max, done, coins, blooms }`: a wave grows from the boss; cells inside r become lush (soil = lushSoil),
+  every growing plant it passes blooms (normal `bloom` event with `victory: true`). `result()` adds bossReward, sweepCoins, sweepBlooms.

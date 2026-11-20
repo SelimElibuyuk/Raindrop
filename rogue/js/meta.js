@@ -4,7 +4,7 @@
   const C = RD.CONFIG;
 
   function defaultData() {
-    return { coins: 0, levels: {}, stats: { runs: 0, bestCoins: 0, totalBlooms: 0, totalCoins: 0 } };
+    return { coins: 0, levels: {}, level: 1, stats: { runs: 0, bestCoins: 0, totalBlooms: 0, totalCoins: 0, bossWins: 0 } };
   }
   function defaultSettings() {
     return { mode: 'timer', preset: null, overrides: {} };
@@ -36,6 +36,7 @@
                 if (lv > 0) d.levels[u.id] = Math.min(lv, u.max);
               });
             }
+            d.level = Math.max(1, Math.min(C.levels.length + 1, Math.floor(num(o.level, 1))));
             if (o.stats && typeof o.stats === 'object') {
               for (const k in d.stats) d.stats[k] = num(o.stats[k], 0);
             }
@@ -82,11 +83,35 @@
 
     upgradeById: upgradeById,
 
+    // ---- Levels (PRD §12) ----
+    // data.level = highest unlocked level (levels.length + 1 means all cleared; the last level is replayed).
+    currentLevel: function () {
+      return C.levels[Math.min(Meta.data.level, C.levels.length) - 1];
+    },
+    allCleared: function () { return Meta.data.level > C.levels.length; },
+    unlockedFlowers: function () {
+      const set = {};
+      C.startFlowers.forEach(function (t) { set[t] = true; });
+      C.levels.forEach(function (lv) { if (Meta.data.level > lv.id && lv.unlocks) set[lv.unlocks] = true; });
+      return set;
+    },
+    // Flower that a stat belongs to (countStat/bonusStat/mulStat), or null.
+    flowerOfStat: function (stat) {
+      for (const t in C.plants) {
+        const p = C.plants[t];
+        if (p.countStat === stat || p.bonusStat === stat || p.mulStat === stat) return t;
+      }
+      return null;
+    },
+
     // Tree visibility: a node shows once its parent has level >= 1 (root is always visible).
     isVisible: function (id) {
       const u = upgradeById(id);
       if (!u) return false;
       if (!u.parent) return true;
+      // Flower nodes stay hidden until a level unlocks that flower
+      const fl = u.stat && Meta.flowerOfStat(u.stat);
+      if (fl && !Meta.unlockedFlowers()[fl]) return false;
       return Meta.levelOf(u.parent) >= 1;
     },
 
@@ -150,6 +175,10 @@
       st.bestCoins = Math.max(st.bestCoins, result.coins || 0);
       st.totalBlooms += result.blooms || 0;
       st.totalCoins += result.coins || 0;
+      if (result.bossWin && result.levelId === Meta.data.level && Meta.data.level <= C.levels.length) {
+        Meta.data.level += 1;
+        st.bossWins += 1;
+      }
     },
   };
   RD.Meta = Meta;

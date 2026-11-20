@@ -12,7 +12,8 @@
   function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 
   class Run {
-    constructor(stats, rules, field) {
+    // ctx = { level: CONFIG.levels[i], flowers: { type: true } } (PRD §12); optional for old callers/tests
+    constructor(stats, rules, field, ctx) {
       this.stats = stats;
       this.rules = rules;
       this.w = field.w;
@@ -40,6 +41,18 @@
       this._nextId = 1;
       this._respawn = [];   // seconds left until each pending seedling appears
 
+      // Level bar + boss (PRD §12)
+      ctx = ctx || {};
+      this.level = ctx.level || null;
+      this.flowers = ctx.flowers || null;          // null = every flower allowed
+      this.barTarget = this.level ? this.level.barTarget : 0;
+      this.barPoints = 0;
+      this.bar = 0;                                // 0..1
+      this.boss = null;                            // see _spawnBoss
+      this.bossWin = false;
+      this.greenCell = C.greenCell || 32;
+      this._initGreen();
+
       for (let i = 0; i < stats.plantCount; i++) this._spawnPlant();
       this._updateCloudRadius();
     }
@@ -48,7 +61,7 @@
     _findSpot() {
       const w = this.w, h = this.h;
       const minX = Math.min(MARGIN, w / 2), maxX = Math.max(w - MARGIN, w / 2);
-      const minY = Math.min(MARGIN + 45, h / 2) /* plants grow upward: keep their heads below the top edge/HUD */, maxY = Math.max(h - MARGIN, h / 2);
+      const minY = Math.min(MARGIN + 70, h / 2) /* plants grow upward: keep their heads below the top edge/HUD */, maxY = Math.max(h - MARGIN, h / 2);
       let best = null, bestScore = -Infinity;
       for (let attempt = 0; attempt < 40; attempt++) {
         const x = minX + Math.random() * (maxX - minX);
@@ -71,17 +84,19 @@
     // otherwise pick a filler plant by its internal weight (never shown to the player).
     _pickType() {
       const s = this.stats;
+      const ok = this.flowers;
       for (const type in C.plants) {
         const cfg = C.plants[type];
-        if (!cfg.countStat) continue;
+        if (!cfg.countStat || (ok && !ok[type])) continue;
         let n = 0;
         for (const p of this.plants) if (p.type === type && p.state === 'growing') n++;
         if (n < (s[cfg.countStat] || 0)) return type;
       }
       let total = 0;
-      for (const type in C.plants) total += C.plants[type].weight || 0;
+      for (const type in C.plants) if (!ok || ok[type]) total += C.plants[type].weight || 0;
       let r = Math.random() * total;
       for (const type in C.plants) {
+        if (ok && !ok[type]) continue;
         r -= C.plants[type].weight || 0;
         if (r < 0) return type;
       }
@@ -126,6 +141,9 @@
       const gain = Math.max(1, Math.round(flat * this.combo * s.coinMul * extraMul));
       this.coins += gain;
       this.blooms++;
+      this._addBar(C.bloomPoints || 2);
+      // A bloom greens a small patch around the plant
+      if (C.bloomGreen && !this.over) this._waterGround(p.x, p.y, C.bloomGreen.radius, C.bloomGreen.soil);
       this.water = Math.min(this.tank, this.water + s.dew + (cfg.refund || 0));
 
       p.bloomsLeft = (p.bloomsLeft || 1) - 1;
@@ -181,6 +199,11 @@
           }
         }
       }
+      // Soil greening (level bar) and boss
+      if (this.raining) this._waterGround(c.x, c.y, this.rainRadius, s.rainRate * (C.groundMul || 1) * dt);
+      if (this.boss) this._updateBoss(dt);
+      if (this.over) return;
+
       // Wilting flowers lose water while not under the rain
       for (const p of this.plants) {
         const w = C.plants[p.type].wilt;
@@ -221,6 +244,163 @@
       this._updateCloudRadius();
     }
 
+    // ---------- level bar ----------
+    _initGreen() {
+      const g = this.greenCell;
+      this.gw = Math.max(1, Math.ceil(this.w / g));
+      this.gh = Math.max(1, Math.ceil(this.h / g));
+      this.soil = new Float32Array(this.gw * this.gh);      // water soaked per cell
+      this.greened = new Uint8Array(this.gw * this.gh);     // 1 once the cell counted for the bar
+      this.greenCount = 0;
+    }
+
+    _waterGround(x, y, r, amount) {
+      const g = this.greenCell, need = C.greenNeed || 2.5;
+      const i0 = Math.max(0, Math.floor((x - r) / g)), i1 = Math.min(this.gw - 1, Math.floor((x + r) / g));
+      const j0 = Math.max(0, Math.floor((y - r) / g)), j1 = Math.min(this.gh - 1, Math.floor((y + r) / g));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const cx = (i + 0.5) * g, cy = (j + 0.5) * g;
+        if (Math.hypot(cx - x, cy - y) > r + g * 0.35) continue;
+        const k = j * this.gw + i;
+        this.soil[k] += amount;
+        if (!this.greened[k] && this.soil[k] >= need) {
+          this.greened[k] = 1;
+          this.greenCount++;
+          this._addBar(1);
+        }
+      }
+    }
+
+    // Fraction of soil cells inside a circle that are greened (the rose boss shield)
+    _greenFrac(x, y, r) {
+      const g = this.greenCell;
+      let n = 0, on = 0;
+      for (let j = 0; j < this.gh; j++) for (let i = 0; i < this.gw; i++) {
+        const cx = (i + 0.5) * g, cy = (j + 0.5) * g;
+        if (Math.hypot(cx - x, cy - y) > r) continue;
+        n++; if (this.greened[j * this.gw + i]) on++;
+      }
+      return n ? on / n : 1;
+    }
+
+    _addBar(points) {
+      if (!this.level || this.boss) return;
+      this.barPoints += points;
+      this.bar = Math.min(1, this.barPoints / this.barTarget);
+      if (this.bar >= 1) this._spawnBoss();
+    }
+
+    // ---------- boss ----------
+    _spawnBoss() {
+      const lv = this.level, b = lv.boss;
+      const cx = this.w / 2, cy = clamp(this.h * 0.52, 120, this.h - 80);
+      const boss = { kind: b.kind, type: b.type, label: b.label, hint: b.hint, x: cx, y: cy,
+        parts: [], t: 0, shield: 0, shade: 0, scorched: false, done: false };
+      if (b.kind === 'arms') {
+        const rad = Math.min(this.w, this.h) * 0.3;
+        for (let i = 0; i < b.arms; i++) {
+          const a = -Math.PI / 2 + i * (Math.PI * 2 / b.arms) + 0.35;
+          boss.parts.push({ x: clamp(cx + Math.cos(a) * rad, 50, this.w - 50), y: clamp(cy + Math.sin(a) * rad, 110, this.h - 50),
+            water: 0, need: b.need, done: false, wet: false });
+        }
+      } else {
+        boss.parts.push({ x: cx, y: cy, water: 0, need: b.need, done: false, wet: false });
+      }
+      // Clear ordinary plants that overlap the boss parts
+      for (let i = this.plants.length - 1; i >= 0; i--) {
+        const p = this.plants[i];
+        if (boss.parts.some(function (q) { return Math.hypot(q.x - p.x, q.y - p.y) < 50; })) this.plants.splice(i, 1);
+      }
+      this.boss = boss;
+      if (this.timeLimit > 0) this.timeLimit += lv.bossTime || 0;
+      this.water = Math.min(this.tank, this.water + (lv.bossWater || 0));
+      this.events.push({ type: 'bossSpawn', x: cx, y: cy, label: b.label, hint: b.hint, bossType: b.type });
+    }
+
+    _updateBoss(dt) {
+      const boss = this.boss, b = this.level.boss, c = this.cloud, s = this.stats;
+      boss.t += dt;
+      const rr = this.rainRadius, amount = this.raining ? s.rainRate * dt : 0;
+      for (const q of boss.parts) q.wet = !q.done && this.raining && Math.hypot(q.x - c.x, q.y - c.y) <= rr + 14;
+
+      if (b.kind === 'arms') {
+        for (const q of boss.parts) {
+          if (q.done) continue;
+          if (q.wet) {
+            q.water += amount;
+            // A watered arm dries the plants around it
+            for (const p of this.plants) {
+              if (p.state === 'growing' && Math.hypot(p.x - q.x, p.y - q.y) < b.dryRadius) p.water = Math.max(0, p.water - b.dryRate * dt);
+            }
+          } else {
+            q.water = Math.max(0, q.water - b.wilt * dt);
+          }
+          if (q.water >= q.need) { q.done = true; this.events.push({ type: 'bossPart', x: q.x, y: q.y }); }
+        }
+      } else if (b.kind === 'shield') {
+        boss.shield = this._greenFrac(boss.x, boss.y, b.shieldRadius) / b.shieldFrac;   // >= 1 means shield down
+        const q = boss.parts[0];
+        if (q.wet) {
+          if (boss.shield >= 1) q.water += amount;
+          else if (!boss._blockT || boss.t - boss._blockT > 0.8) { boss._blockT = boss.t; this.events.push({ type: 'bossBlocked', x: q.x, y: q.y }); }
+        }
+        if (q.water >= q.need) q.done = true;
+      } else if (b.kind === 'shade') {
+        const q = boss.parts[0];
+        if (q.wet) boss.shade += dt; else boss.shade = Math.max(0, boss.shade - b.cool * dt);
+        if (!boss.scorched && boss.shade >= b.shadeMax) { boss.scorched = true; this.events.push({ type: 'bossScorch', x: q.x, y: q.y }); }
+        if (boss.scorched && boss.shade <= 0) boss.scorched = false;
+        if (boss.scorched) q.water = Math.max(0, q.water - b.scorch * dt);
+        else if (q.wet) q.water += amount;
+        if (q.water >= q.need) q.done = true;
+      }
+
+      if (boss.parts.every(function (q) { return q.done; })) {
+        boss.done = true;
+        this.bossWin = true;
+        const reward = Math.round((this.level.reward || 0) * (s.coinMul || 1));
+        this.coins += reward;
+        this.events.push({ type: 'bossWin', x: boss.x, y: boss.y, coins: reward, unlocks: this.level.unlocks });
+        this.bossReward = reward;
+        this.sweep = { x: boss.x, y: boss.y, r: 0, max: Math.hypot(Math.max(boss.x, this.w - boss.x), Math.max(boss.y, this.h - boss.y)) + 40,
+          done: false, coins: 0, blooms: 0, hold: (C.victory && C.victory.hold) || 0.9 };
+        this._finish('boss');
+      }
+    }
+
+    // Boss win celebration (called by main.js every frame after a boss win, instead of update):
+    // a green wave spreads from the boss; every cell it passes turns lush and every growing plant blooms (extra coins).
+    victoryStep(dt) {
+      const sw = this.sweep;
+      this.events.length = 0;
+      if (!sw || sw.done) return true;
+      const prev = sw.r;
+      sw.r = Math.min(sw.max, sw.r + ((C.victory && C.victory.speed) || 460) * dt);
+      const g = this.greenCell, lush = C.lushSoil || 8;
+      for (let j = 0; j < this.gh; j++) for (let i = 0; i < this.gw; i++) {
+        const d = Math.hypot((i + 0.5) * g - sw.x, (j + 0.5) * g - sw.y);
+        if (d <= sw.r) { const k = j * this.gw + i; if (this.soil[k] < lush) this.soil[k] = lush; this.greened[k] = 1; }
+      }
+      for (const p of this.plants) {
+        if (p.state !== 'growing') continue;
+        const d = Math.hypot(p.x - sw.x, p.y - sw.y);
+        if (d > prev - 1 && d <= sw.r) {
+          const before = this.coins;
+          p.bloomsLeft = 1;
+          this._bloom(p);
+          const ev = this.events[this.events.length - 1];
+          if (ev && ev.type === 'bloom') ev.victory = true;
+          sw.coins += this.coins - before;
+          sw.blooms++;
+        }
+      }
+      if (sw.r >= sw.max) {
+        sw.hold -= dt;
+        if (sw.hold <= 0) sw.done = true;
+      }
+      return sw.done;
+    }
+
     _finish(reason) {
       this.over = true;
       this.endReason = reason;
@@ -235,10 +415,20 @@
       this.cloud.x = clamp(this.cloud.x, 0, w);
       this.cloud.y = clamp(this.cloud.y, 0, h);
       const minX = Math.min(MARGIN, w / 2), maxX = Math.max(w - MARGIN, w / 2);
-      const minY = Math.min(MARGIN + 45, h / 2) /* plants grow upward: keep their heads below the top edge/HUD */, maxY = Math.max(h - MARGIN, h / 2);
+      const minY = Math.min(MARGIN + 70, h / 2) /* plants grow upward: keep their heads below the top edge/HUD */, maxY = Math.max(h - MARGIN, h / 2);
       for (const p of this.plants) {
         p.x = clamp(p.x, minX, maxX);
         p.y = clamp(p.y, minY, maxY);
+      }
+      // The level-bar soil grid keeps its counts; only the grid size follows the field
+      const oldW = this.gw, oldSoil = this.soil, oldG = this.greened;
+      this.gw = Math.max(1, Math.ceil(w / this.greenCell));
+      this.gh = Math.max(1, Math.ceil(h / this.greenCell));
+      this.soil = new Float32Array(this.gw * this.gh);
+      this.greened = new Uint8Array(this.gw * this.gh);
+      for (let k = 0; k < oldSoil.length; k++) {
+        const i = k % oldW, j = Math.floor(k / oldW);
+        if (i < this.gw && j < this.gh) { this.soil[j * this.gw + i] = oldSoil[k]; this.greened[j * this.gw + i] = oldG[k]; }
       }
     }
 
@@ -250,6 +440,15 @@
         duration: this.t,
         endReason: this.endReason,
         mode: this.rules.mode,
+        levelId: this.level ? this.level.id : 0,
+        levelName: this.level ? this.level.name : '',
+        bar: this.bar,
+        bossReached: !!this.boss,
+        bossWin: this.bossWin,
+        unlocks: this.bossWin && this.level ? this.level.unlocks : null,
+        bossReward: this.bossReward || 0,
+        sweepCoins: this.sweep ? this.sweep.coins : 0,
+        sweepBlooms: this.sweep ? this.sweep.blooms : 0,
       };
     }
   }

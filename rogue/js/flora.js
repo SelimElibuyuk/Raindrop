@@ -28,10 +28,20 @@
     h ^= h >>> 16;
     return (h >>> 0) / 4294967296;
   }
-  // Stem height fraction: sprout (0-0.15), stem rises (0.15-0.6), full from 0.6 on (bud phase).
+  // Stem height fraction: sprout (0-0.15), stem rises (0.15-0.6), full from 0.6 on (cactus body).
   function stemFrac(g) {
     return g < 0.15 ? 0.1 + 0.13 * (g / 0.15) : (g < 0.6 ? 0.23 + 0.77 * ((g - 0.15) / 0.45) : 1);
   }
+  // Per-type stem height fraction: 0.1 at g = 0, full at g = end. curve < 1 shoots up early (sunflower),
+  // curve > 1 stays low and bolts late (daisy), so the types reach different heights at every stage.
+  function stemF(g, end, curve) {
+    const t = g >= end ? 1 : g / end;
+    return 0.1 + 0.9 * (curve === 1 ? t : Math.pow(t, curve));
+  }
+  // Shared bud timing (all types): buds appear from 0.3 and reach full size at 1. The flower colour
+  // shows faintly as soon as the bud appears, is clear by 0.5 and strong by 0.7 (both are 1 at g = 1).
+  function budG(g) { return eOut(ph(g, 0.3, 1)); }
+  function tintG(g) { return 0.3 * ph(g, 0.3, 0.4) + 0.7 * ph(g, 0.4, 0.72); }
 
   // ---------- colour ----------
   const rgbCache = {};
@@ -131,16 +141,40 @@
     ctx.quadraticCurveTo(st.cx, st.cy, st.x1, st.y1);
     ctx.stroke();
   }
-  // Two seed leaves near the base: there from the start, they shrink away as real leaves take over.
-  function seedLeaves(ctx, S, h, cL, cD) {
+  // Seed leaves (sprout): there from the start, they shrink away as real leaves take over (gone by 0.6).
+  // Each type has its own shape (pair or single blade, size, spread) and the tips are tinted in the
+  // flower's colour, so even a fresh sprout tells its type at a glance.
+  // Q = [count (1 = single upright blade, 2 = pair), length, width, roundness, spread angle,
+  //      anchor height on the stem in design units (0 = at the ground)]
+  function seedLeaves(ctx, S, h, cL, cD, Q, leafHex, tipHex) {
     const g = S.g;
-    const k = (0.7 + 0.3 * eOut(ph(g, 0, 0.12))) * (1 - eInOut(ph(g, 0.3, 0.55)));
+    const k = (0.7 + 0.3 * eOut(ph(g, 0, 0.12))) * (1 - eInOut(ph(g, 0.34, 0.6)));
     if (k <= 0.02) return;
-    stemAt(h > 0 ? Math.min(1, 12 / h) : 1);
-    const open = 0.55 + 0.7 * eOut(ph(g, 0, 0.14)) + S.w * 0.5;
-    leaf(ctx, pt.x, pt.y, pt.a - open, 11.5 * k, 6.2 * k, cL, cD, 0.8);
-    leaf(ctx, pt.x, pt.y, pt.a + open, 11.5 * k, 6.2 * k, cL, cD, 0.8);
+    stemAt(h > 0 ? Math.min(1, Q[5] / h) : 1);
+    const len = Q[1] * k, wid = Q[2] * k, rnd = Q[3];
+    const open = Q[4] * (0.45 + 0.55 * eOut(ph(g, 0, 0.14))) + S.w * 0.5;
+    const cT = mixc(leafHex, tipHex, 0.85);
+    if (Q[0] === 1) {
+      seedLeaf(ctx, pt.x, pt.y, pt.a + open, len, wid, rnd, cL, cD, cT);
+    } else {
+      seedLeaf(ctx, pt.x, pt.y, pt.a - open, len, wid, rnd, cL, cD, cT);
+      seedLeaf(ctx, pt.x, pt.y, pt.a + open, len, wid, rnd, cL, cD, cT);
+    }
   }
+  // One seed leaf with a coloured tip (the outer ~half of the leaf, inset so it stays inside the outline).
+  function seedLeaf(ctx, x, y, a, len, wid, rnd, cL, cD, cT) {
+    leaf(ctx, x, y, a, len, wid, cL, cD, rnd);
+    if (len < 2) return;
+    ctx.beginPath(); petalPath(ctx, x, y, a, len * 0.45, len * 0.55, wid * 0.7, rnd, 0); fillPath(ctx, cT);
+  }
+  // Seed leaf shapes per type (see seedLeaves for the fields).
+  const SEED_DAISY = [2, 10, 6.6, 0.95, 1.4, 4];       // round spoon pair lying almost flat
+  const SEED_TULIP = [1, 19, 7, 0.6, 0.1, 0];          // one broad upright blade
+  const SEED_LAV = [2, 13, 2.6, 0.5, 0.45, 9];         // narrow needle V
+  const SEED_BELL = [1, 18, 3.2, 0.5, 0.45, 0];        // one thin leaning blade
+  const SEED_ROSE = [2, 10, 5.6, 0.8, 0.95, 9];        // small oval pair (on a bronze stem)
+  const SEED_SUN = [2, 16, 8.8, 0.85, 1.05, 12];       // big thick oval pair
+  const SEED_LILY = [1, 25, 3.2, 0.45, 0.05, 0];       // one long straight spear
   // Moves to the stem tip and rotates for the flower head (follows the stem, droops when wilted).
   function toHead(ctx, follow, droop, w) {
     stemAt(1);
@@ -203,9 +237,9 @@
       leaf(ctx, 0.5, -H + 1, 0.85, 5 * nk, 3 * nk, col(P.bodyL), col(P.body), 0.9);
     }
     // Crown: buds, then small flowers
-    const bs = eOut(ph(g, 0.6, 1)), b = S.b, o = eBack(b);
+    const bs = budG(g), b = S.b, o = eBack(b);
     if (bs <= 0.01) return;
-    const tint = 0.6 * ph(g, 0.8, 1) + 0.4 * b;
+    const tint = 0.8 * tintG(g) + 0.4 * b;
     const bud = bs * (1 - ph(b, 0, 0.5));
     for (let j = 0; j < 3; j++) {
       const c = CACTUS_CROWN[j], x = c[0] * W, y = -H * c[1] - 0.5, s = c[2];
@@ -228,10 +262,11 @@
   // Daisy: low leaf rosette, slim stem, white petal disc with a yellow centre.
   const DAISY_A = [-1.25, 1.2, -0.7, 0.62, -0.12];
   function drawDaisy(ctx, S, P) {
-    const g = S.g, w = S.w, sf = stemFrac(g), h = 56 * sf;
+    // Stays a low, wide rosette for long; the stem bolts late.
+    const g = S.g, w = S.w, sf = stemF(g, 0.85, 2.2), h = 56 * sf;
     const cL = col(P.leaf), cD = col(P.leafD);
     for (let i = 0; i < 5; i++) {
-      const u = eOut(ph(g, 0.1 + i * 0.07, 0.3 + i * 0.07));
+      const u = eOut(ph(g, 0.05 + i * 0.06, 0.25 + i * 0.06));
       if (u <= 0) continue;
       const a0 = DAISY_A[i] + (S.rnd(20 + i) - 0.5) * 0.25;
       const a = a0 * (0.5 + 0.5 * u) + (a0 < 0 ? -1 : 1) * w * 0.45;
@@ -239,15 +274,15 @@
     }
     setStem(h, (S.r1 - 0.5) * 7 * sf, w);
     strokeStem(ctx, 2.8, col(P.stem));
-    seedLeaves(ctx, S, h, cL, cD);
-    const u = eOut(ph(g, 0.4, 0.6));
+    seedLeaves(ctx, S, h, cL, cD, SEED_DAISY, P.leaf, P.petal);
+    const u = eOut(ph(g, 0.5, 0.72));
     if (u > 0) { stemAt(0.42); leaf(ctx, pt.x, pt.y, pt.a + 0.85 + w * 0.5, 12 * u, 4 * u, cL, cD); }
 
     toHead(ctx, 0.7, 0.8, w);
-    const bs = eOut(ph(g, 0.6, 1)), b = S.b, o = eBack(b);
+    const bs = budG(g), b = S.b, o = eBack(b);
     const bud = bs * (1 - ph(b, 0, 0.45));
     if (bud > 0.01) {
-      const r = 5.4 * bud, tint = ph(g, 0.8, 1);
+      const r = 5.4 * bud, tint = tintG(g);
       ctx.beginPath(); circ(ctx, 0, -r * 0.8, r); fillPath(ctx, col(P.bud));
       if (tint > 0) { ctx.beginPath(); ell(ctx, 0, -r * 1.25, r * 0.72, r * 0.55 * (0.5 + 0.5 * tint), 0); fillPath(ctx, mixc(P.bud, P.petal, tint)); }
       ctx.beginPath(); ctx.moveTo(-r, -r * 0.8); ctx.arc(0, -r * 0.8, r, Math.PI, 0, true); ctx.closePath(); fillPath(ctx, col(P.leafD));
@@ -271,19 +306,20 @@
 
   // Tulip: two broad leaves, cup flower that opens from a closed egg.
   function drawTulip(ctx, S, P) {
-    const g = S.g, w = S.w, sf = stemFrac(g), h = 56 * sf;
+    // Broad leaves come first and dominate; the stem stays short until the egg bud rises.
+    const g = S.g, w = S.w, sf = stemF(g, 0.75, 1.4), h = 56 * sf;
     const cL = col(P.leaf), cD = col(P.leafD);
     setStem(h, (S.r1 - 0.5) * 6 * sf, w);
     strokeStem(ctx, 3.3, col(P.stem));
-    seedLeaves(ctx, S, h, cL, cD);
-    const u1 = eOut(ph(g, 0.15, 0.38)), u2 = eOut(ph(g, 0.28, 0.52));
+    seedLeaves(ctx, S, h, cL, cD, SEED_TULIP, P.leaf, P.petal);
+    const u1 = eOut(ph(g, 0.03, 0.3)), u2 = eOut(ph(g, 0.12, 0.4));
     if (u1 > 0) leaf(ctx, -1, 0, (-0.3 - 0.2 * S.r3) * (0.6 + 0.4 * u1) - w * 0.5, 40 * u1, 10.5 * u1, cL, cD, 0.6);
     if (u2 > 0) leaf(ctx, 1, 0, (0.36 + 0.2 * S.r4) * (0.6 + 0.4 * u2) + w * 0.5, 32 * u2, 9.5 * u2, cL, cD, 0.6);
 
     toHead(ctx, 0.7, 0.9, w);
-    const bs = eOut(ph(g, 0.6, 1)), b = S.b, o = eBack(b);
+    const bs = budG(g), b = S.b, o = eBack(b);
     if (bs <= 0.01) return;
-    const reveal = 0.45 * ph(g, 0.78, 1) + 0.55 * eOut(ph(b, 0, 0.7));
+    const reveal = 0.8 * tintG(g) + 0.55 * eOut(ph(b, 0, 0.7));
     const sz = bs * (0.8 + 0.2 * o);
     const spread = 0.34 * o, len = 24 * sz, wid = (8.2 + 1.3 * o) * sz;
     ctx.beginPath();
@@ -320,27 +356,28 @@
     const g = S.g, w = S.w, b = S.b, o = eBack(b);
     const cL = col(P.leaf), cD = col(P.leafD);
     for (let i = 0; i < 4; i++) {
-      const u = eOut(ph(g, 0.14 + i * 0.07, 0.34 + i * 0.07));
+      const u = eOut(ph(g, 0.05 + i * 0.06, 0.25 + i * 0.06));
       if (u <= 0) continue;
       const a0 = LAV_LEAF[i];
       leaf(ctx, a0 * 2, 0, a0 * (0.55 + 0.45 * u) + (a0 < 0 ? -1 : 1) * w * 0.4, 20 * u, 3.3 * u, cL, cD, 0.5);
     }
     const n = S.r1 < 0.5 ? 4 : 5;
-    const tint = 0.6 * ph(g, 0.8, 1) + 0.4 * b, swell = 1 + 0.3 * o;
+    const tint = 0.85 * tintG(g) + 0.4 * b, swell = 1 + 0.3 * o;
     const cS = col(P.stem), c1 = mixc(P.bud, P.petal, tint), c2 = mixc(P.budD, P.petalD, tint);
     for (let i = 0; i < n; i++) {
       const f = i / (n - 1), off = Math.abs(f - 0.5);
       const ang = (f - 0.5) * 0.62 + (S.rnd(40 + i) - 0.5) * 0.1;
-      const delay = off * 0.16;
+      // Side stems follow the centre one closely, so the fan of thin stems reads early.
+      const delay = off * 0.06;
       const gi = ph(g, delay, 1);
-      const hi = (58 - off * 22 + S.rnd(50 + i) * 6) * stemFrac(gi) * (delay > 0 ? eOut(ph(g, delay, delay + 0.1)) : 1);
+      const hi = (58 - off * 22 + S.rnd(50 + i) * 6) * stemF(gi, 0.65, 0.85) * (delay > 0 ? eOut(ph(g, delay, delay + 0.1)) : 1);
       if (hi < 0.5) continue;
       ctx.save();
       ctx.rotate(ang + (ang < 0 ? -1 : 1) * w * 0.45);
       setStem(hi, 0, w * 0.6);
       strokeStem(ctx, 1.9, cS);
-      if (off < 0.01 || (n === 4 && i === 1)) seedLeaves(ctx, S, hi, cL, cD);
-      const bs = eOut(ph(gi, 0.55, 1));
+      if (off < 0.01 || (n === 4 && i === 1)) seedLeaves(ctx, S, hi, cL, cD, SEED_LAV, P.leaf, P.petal);
+      const bs = eOut(ph(gi, 0.28, 1));
       if (bs > 0.01) {
         toHead(ctx, 1, 0.4, w);
         const len = 24 * bs;
@@ -391,20 +428,20 @@
     const g = S.g, w = S.w, b = S.b, o = eBack(b);
     const cL = col(P.leaf), cD = col(P.leafD);
     for (let i = 0; i < 3; i++) {
-      const u = eOut(ph(g, 0.15 + i * 0.09, 0.36 + i * 0.09));
+      const u = eOut(ph(g, 0.06 + i * 0.08, 0.27 + i * 0.08));
       if (u > 0) leaf(ctx, (i - 1) * 1.5, 0, BB_LEAF_A[i] * (0.6 + 0.4 * u) + (BB_LEAF_A[i] < 0 ? -1 : 1) * w * 0.4, BB_LEAF_L[i] * u, 4.3 * u, cL, cD, 0.5);
     }
-    const sf = stemFrac(g), h = 88 * sf;
-    const A = eInOut(ph(g, 0.35, 0.85));                 // how far the stem arches over
+    const sf = stemF(g, 0.7, 1), h = 88 * sf;
+    const A = eInOut(ph(g, 0.2, 0.62));                  // how far the stem arches over (early: the hook reads)
     st.x0 = 0; st.y0 = 0;
     st.cx = 3 * A + h * 0.04 * w; st.cy = -h * (1 + 0.12 * A) * (1 - 0.15 * w);
     st.x1 = h * (0.5 * A + 0.18 * w); st.y1 = -h * (1 - 0.38 * A - 0.2 * w);
     strokeStem(ctx, 2.3, col(P.stem));
-    seedLeaves(ctx, S, h, cL, cD);
-    const tint = 0.5 * ph(g, 0.85, 1) + 0.5 * b;
+    seedLeaves(ctx, S, h, cL, cD, SEED_BELL, P.leaf, P.petal);
+    const tint = tintG(g) + 0.5 * b;
     const cB = mixc(P.bud, P.petal, tint), cBD = mixc(P.budD, P.petalD, tint), cS = col(P.stem);
     for (let i = 0; i < 3; i++) {
-      const bs = eOut(ph(g, 0.6 + i * 0.08, 0.84 + i * 0.08));
+      const bs = eOut(ph(g, 0.32 + i * 0.08, 0.72 + i * 0.09));
       if (bs <= 0.01) continue;
       stemAt(0.62 + i * 0.18);
       const ex = pt.x + 1.6 * bs, ey = pt.y + 3.6 * bs;
@@ -470,12 +507,14 @@
     fillPath(ctx, cP);
   }
   function drawRose(ctx, S, P) {
-    const g = S.g, w = S.w, sf = stemFrac(g), h = 60 * sf;
-    const cL = col(P.leaf), cD = col(P.leafD), cS = col(P.stem);
+    // Young rose growth is bronze-red (stem and leaves) and greens up by g = 0.95.
+    const g = S.g, w = S.w, sf = stemF(g, 0.7, 1), h = 60 * sf;
+    const yk = 1 - ph(g, 0.35, 0.95);
+    const cL = mixc(P.leaf, P.youngL, 0.8 * yk), cD = mixc(P.leafD, P.youngD, 0.8 * yk), cS = mixc(P.stem, P.young, yk);
     setStem(h, (S.r1 - 0.5) * 8 * sf, w);
     strokeStem(ctx, 3, cS);
-    seedLeaves(ctx, S, h, cL, cD);
-    const tu = eOut(ph(g, 0.25, 0.5));
+    seedLeaves(ctx, S, h, cL, cD, SEED_ROSE, P.youngL, P.petal);
+    const tu = eOut(ph(g, 0.18, 0.4));
     if (tu > 0) {
       ctx.beginPath();
       for (let j = 0; j < ROSE_THORN.length; j++) {
@@ -490,15 +529,15 @@
       fillPath(ctx, col(P.thorn));
     }
     for (let i = 0; i < 3; i++) {
-      const u = eOut(ph(g, 0.17 + i * 0.12, 0.38 + i * 0.12));
+      const u = eOut(ph(g, 0.1 + i * 0.1, 0.3 + i * 0.1));
       if (u <= 0) continue;
       stemAt(ROSE_LT[i]);
       compoundLeaf(ctx, pt.x, pt.y, pt.a + ROSE_LS[i] * (0.5 + 0.55 * u + w * 0.4), 17 * u, cS, cL, cD);
     }
 
     toHead(ctx, 0.7, 0.8, w);
-    const bs = eOut(ph(g, 0.6, 1)), b = S.b, o = eBack(b);
-    const tint = 0.6 * ph(g, 0.78, 1) + 0.4 * b;
+    const bs = budG(g), b = S.b, o = eBack(b);
+    const tint = 0.9 * tintG(g) + 0.4 * b;
     const bud = bs * (1 - ph(b, 0.1, 0.6));
     if (bud > 0.01) {
       const bl = 13 * bud, bw = 5.4 * bud;
@@ -521,13 +560,14 @@
   // Sunflower: tall, big leaves, large golden ray disc around a seeded brown centre.
   const SUN_LT = [0.24, 0.44, 0.64], SUN_LS = [-1, 1, -1], SUN_LL = [25, 23, 18], SUN_LW = [12.5, 11.5, 9];
   function drawSunflower(ctx, S, P) {
-    const g = S.g, w = S.w, sf = stemFrac(g), h = 72 * sf;
+    // Shoots up fast on a thick stem: the tallest plant early on.
+    const g = S.g, w = S.w, sf = stemF(g, 0.6, 0.75), h = 72 * sf;
     const cL = col(P.leaf), cD = col(P.leafD), cS = col(P.stem);
     setStem(h, (S.r1 - 0.5) * 6 * sf, w);
     strokeStem(ctx, 4.4, cS);
-    seedLeaves(ctx, S, h, cL, cD);
+    seedLeaves(ctx, S, h, cL, cD, SEED_SUN, P.leaf, P.petal);
     for (let i = 0; i < 3; i++) {
-      const u = eOut(ph(g, 0.16 + i * 0.12, 0.4 + i * 0.12));
+      const u = eOut(ph(g, 0.08 + i * 0.1, 0.32 + i * 0.1));
       if (u <= 0) continue;
       stemAt(SUN_LT[i]);
       const a = pt.a + SUN_LS[i] * (0.45 + 0.8 * u + w * 0.5);
@@ -538,7 +578,7 @@
     }
 
     toHead(ctx, 0.6, 0.8, w);
-    const bs = eOut(ph(g, 0.6, 1)), b = S.b, o = eBack(b), oc = Math.min(1, o);
+    const bs = budG(g), b = S.b, o = eBack(b), oc = Math.min(1, o);
     if (bs <= 0.01 && b <= 0) return;
     ctx.translate(0, -3 * bs);
     ctx.scale(1, 0.92);
@@ -553,7 +593,7 @@
     }
     const bud = bs * (1 - ph(b, 0, 0.5));
     if (bud > 0.01) {
-      const tint = ph(g, 0.82, 1);
+      const tint = tintG(g);
       if (tint > 0) {
         ctx.beginPath();
         for (let i = 0; i < 10; i++) petalPath(ctx, 0, 0, (i + 0.5) * TAU / 10, 4 * bud, 4.5 * bud * tint, 1.9 * bud, 0.8, 0);
@@ -589,21 +629,22 @@
     fillPath(ctx, cP);
   }
   function drawSkylily(ctx, S, P) {
-    const g = S.g, w = S.w, sf = stemFrac(g), h = 68 * sf;
+    // Long blade leaves first, then a very slender stem that keeps rising to the tallest height.
+    const g = S.g, w = S.w, sf = stemF(g, 0.85, 1.3), h = 68 * sf;
     const cL = col(P.leaf), cD = col(P.leafD);
-    const u1 = eOut(ph(g, 0.15, 0.38)), u2 = eOut(ph(g, 0.26, 0.5));
+    const u1 = eOut(ph(g, 0.04, 0.3)), u2 = eOut(ph(g, 0.14, 0.42));
     if (u1 > 0) leaf(ctx, -1, 0, -0.32 * (0.6 + 0.4 * u1) - w * 0.5, 34 * u1, 4.2 * u1, cL, cD, 0.5);
     if (u2 > 0) leaf(ctx, 1, 0, 0.42 * (0.6 + 0.4 * u2) + w * 0.5, 27 * u2, 3.8 * u2, cL, cD, 0.5);
     setStem(h, (S.r1 - 0.5) * 6 * sf, w);
     strokeStem(ctx, 2.2, col(P.stem));
-    seedLeaves(ctx, S, h, cL, cD);
-    const u3 = eOut(ph(g, 0.38, 0.58));
+    seedLeaves(ctx, S, h, cL, cD, SEED_LILY, P.leaf, P.petal);
+    const u3 = eOut(ph(g, 0.36, 0.58));
     if (u3 > 0) { stemAt(0.45); leaf(ctx, pt.x, pt.y, pt.a + 0.5 + w * 0.5, 17 * u3, 3.2 * u3, cL, cD, 0.5); }
 
     toHead(ctx, 0.7, 0.9, w);
-    const bs = eOut(ph(g, 0.6, 1)), b = S.b, o = eBack(b), oc = Math.min(1, o);
+    const bs = budG(g), b = S.b, o = eBack(b), oc = Math.min(1, o);
     if (bs <= 0.01) return;
-    const tint = 0.75 * ph(g, 0.7, 1) + 0.25 * b;
+    const tint = Math.min(1, tintG(g) + 0.25 * b);
     const len = 19 * bs * (0.88 + 0.12 * oc), wid = (2.8 + 2 * oc) * bs, r0 = 1.2 * oc;
     const edge = (0.5 + 0.9 * oc) * bs;
     const cE = mixc(P.bud, P.edge, 0.3 * tint + 0.7 * b);
@@ -645,7 +686,7 @@
     bluebell: { h: 76, ic: 0.78, wd: 68, cx: 14, shadow: 22, lean: 1, draw: drawBluebell,
       pal: { leaf: '#6fa57c', leafD: '#52865f', stem: '#5f9570', bud: '#8cbf8f', budD: '#6fa274', petal: '#6f95dc', petalD: '#4e72c0' } },
     rose: { h: 82, ic: 0.42, wd: 50, cx: 0, shadow: 20, lean: 1, draw: drawRose,
-      pal: { leaf: '#67a063', leafD: '#4b7e48', stem: '#5b8f55', thorn: '#4a7a44', bud: '#7fb06e', budD: '#5f9450', petal: '#e0617f', petalD: '#b6405f', petalL: '#f293a8' } },
+      pal: { leaf: '#67a063', leafD: '#4b7e48', stem: '#5b8f55', thorn: '#4a7a44', young: '#8f4e45', youngL: '#a8784f', youngD: '#80543f', bud: '#7fb06e', budD: '#5f9450', petal: '#e0617f', petalD: '#b6405f', petalL: '#f293a8' } },
     sunflower: { h: 98, ic: 0.6, wd: 60, cx: 0, shadow: 22, lean: 1, draw: drawSunflower,
       pal: { leaf: '#7aaa58', leafD: '#5a8a41', stem: '#6d9c4e', petal: '#f6bf34', petalD: '#e0941e', center: '#6e4526', centerD: '#4e2f1a', seed: '#a0703c' } },
     skylily: { h: 90, ic: 0.5, wd: 50, cx: 0, shadow: 16, lean: 1, draw: drawSkylily,

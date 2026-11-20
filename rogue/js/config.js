@@ -10,7 +10,7 @@
     base: {
       tank: 100,           // water at run start
       rainRadius: 40,      // px
-      rainRate: 3,         // "Yağmur şiddeti": water/s to EACH plant under the rain
+      rainRate: 2,         // "Yağmur şiddeti": water/s to EACH plant under the rain
       cloudSpeed: 4,       // level; px/s = cloudSpeed * speedPx (main.js)
       coinBonus: 0,        // extra coins on every bloom
       roseBonus: 0,        // extra coins on every rose
@@ -65,15 +65,38 @@
     // bonusStat: flat coins added for this type. mulStat: × for this type.
     // comboX: × when bloomed while combo > 1. refund: su back on bloom. rebloom: extra blooms. wilt: su/s lost when not rained on.
     plants: {
-      cactus:    { label: 'Kaktüs',      need: 2,  coins: 1,  color: '#7a9e6a', bloom: '#f2c14e', weight: 65 },
-      daisy:     { label: 'Papatya',     need: 6,  coins: 3,  color: '#8cb488', bloom: '#f3ede2', weight: 35 },
-      tulip:     { label: 'Lale',        need: 8,  coins: 5,  color: '#6f9e6a', bloom: '#e07a4f', countStat: 'tulipCount' },
-      lavender:  { label: 'Lavanta',     need: 6,  coins: 3,  color: '#7f9c86', bloom: '#a58ad0', countStat: 'lavenderCount', comboX: 2 },
-      bluebell:  { label: 'Çan Çiçeği',  need: 8,  coins: 2,  color: '#6e9a7a', bloom: '#6f93d6', countStat: 'bluebellCount', refund: 5 },
-      rose:      { label: 'Gül',         need: 12, coins: 8,  color: '#6a9a66', bloom: '#d65c7a', countStat: 'roseCount', bonusStat: 'roseBonus' },
-      sunflower: { label: 'Ayçiçeği',    need: 14, coins: 7,  color: '#78a05e', bloom: '#e9b23c', countStat: 'sunflowerCount', mulStat: 'sunflowerMul', rebloom: 1 },
-      skylily:   { label: 'Gök Zambağı', need: 36, coins: 30, color: '#5f8e86', bloom: '#4d5fa8', countStat: 'skylilyCount', wilt: 3 },
+      cactus:    { label: 'Kaktüs',      need: 3,  coins: 1,  color: '#7a9e6a', bloom: '#f2c14e', weight: 65 },
+      daisy:     { label: 'Papatya',     need: 5,  coins: 3,  color: '#8cb488', bloom: '#f3ede2', weight: 35 },
+      tulip:     { label: 'Lale',        need: 7,  coins: 5,  color: '#6f9e6a', bloom: '#e07a4f', countStat: 'tulipCount' },
+      lavender:  { label: 'Lavanta',     need: 5,  coins: 3,  color: '#7f9c86', bloom: '#a58ad0', countStat: 'lavenderCount', comboX: 2 },
+      bluebell:  { label: 'Çan Çiçeği',  need: 7,  coins: 2,  color: '#6e9a7a', bloom: '#6f93d6', countStat: 'bluebellCount', refund: 5 },
+      rose:      { label: 'Gül',         need: 10, coins: 8,  color: '#6a9a66', bloom: '#d65c7a', countStat: 'roseCount', bonusStat: 'roseBonus' },
+      sunflower: { label: 'Ayçiçeği',    need: 12, coins: 7,  color: '#78a05e', bloom: '#e9b23c', countStat: 'sunflowerCount', mulStat: 'sunflowerMul', rebloom: 1 },
+      skylily:   { label: 'Gök Zambağı', need: 28, coins: 30, color: '#5f8e86', bloom: '#4d5fa8', countStat: 'skylilyCount', wilt: 3 },
     },
+    // Levels (PRD §12). Watering fills the level bar inside a run: each newly greened soil cell +1, each bloom +2.
+    // A full bar summons the boss (bonus water/time). Watering the boss through its trick clears the level,
+    // ends the run as a win, pays `reward` and unlocks `unlocks` (a flower) + the next level.
+    startFlowers: ['cactus', 'daisy'],
+    greenCell: 32,        // px; soil grid used for the level bar
+    greenNeed: 2,         // soil water a cell needs to count as greened (bar +1)
+    groundMul: 1.5,       // soil gets rainRate × groundMul per second → stronger rain greens faster
+    lushSoil: 8,          // soil water at which a cell is fully lush (render grass level = soil / lushSoil)
+    bloomPoints: 2,
+    bloomGreen: { radius: 44, soil: 6 },   // a bloom soaks/greens a small patch around the plant
+    victory: { speed: 460, hold: 0.9 },    // boss win: green wave from the boss outward (px/s), then hold (s)
+    levels: [
+      { id: 1, name: 'Çatlak Vadi', barTarget: 110, bossTime: 8, bossWater: 40, reward: 30, unlocks: 'tulip',
+        boss: { kind: 'arms', type: 'tulip', label: 'Lale Kraliçesi', arms: 3, need: 10, wilt: 1.5, dryRadius: 80, dryRate: 4,
+          hint: '3 kolu da sula! Sulanmayan kol kurur.' } },
+      { id: 2, name: 'Dikenli Bayır', barTarget: 380, bossTime: 9, bossWater: 50, reward: 70, unlocks: 'rose',
+        boss: { kind: 'shield', type: 'rose', label: 'Gül Ana', need: 70, shieldRadius: 130, shieldFrac: 0.8,
+          hint: 'Önce çevresini yeşert, dikenler çekilsin.' } },
+      { id: 3, name: 'Güneş Tepesi', barTarget: 480, bossTime: 10, bossWater: 60, reward: 140, unlocks: 'sunflower',
+        boss: { kind: 'shade', type: 'sunflower', label: 'Dev Ayçiçeği', need: 75, shadeMax: 1.3, cool: 0.9, scorch: 8,
+          hint: 'Üstünde fazla kalma! Gölgede solar.' } },
+    ],
+
     respawnDelay: 0.8,       // s after a bloom before a new seedling appears
     bloomLinger: 0.6,        // s a bloomed flower stays visible
 
@@ -124,7 +147,7 @@
       { id: 'rare',      branch: 'bounty', label: 'Gül Bahçesi',     desc: 'Haritada +1 gül',          stat: 'roseCount',      kind: 'add', per: 1,    max: 3, baseCost: 90,    growth: 2.3,  parent: 'seeds',     need: 2, pos: [-3, 0] },
       { id: 'gold',      branch: 'bounty', label: 'Altın Gül',       desc: 'Her gül +5 para',          stat: 'roseBonus',      kind: 'add', per: 5,    max: 3, baseCost: 1200,  growth: 2,    parent: 'rare',      need: 2, pos: [-3, -1] },
       { id: 'bluebell',  branch: 'bounty', label: 'Çan Çiçeği',      desc: 'Haritada +1 çan çiçeği',   stat: 'bluebellCount',  kind: 'add', per: 1,    max: 2, baseCost: 700,   growth: 2,    parent: 'rare',      need: 1, pos: [-4, 0] },
-      { id: 'sunflower', branch: 'bounty', label: 'Ayçiçeği',        desc: 'Haritada +1 ayçiçeği',     stat: 'sunflowerCount', kind: 'add', per: 1,    max: 2, baseCost: 6000,  growth: 2,    parent: 'bluebell',  need: 1, pos: [-5, 0] },
+      { id: 'sunflower', branch: 'bounty', label: 'Ayçiçeği',        desc: 'Haritada +1 ayçiçeği',     stat: 'sunflowerCount', kind: 'add', per: 1,    max: 2, baseCost: 6000,  growth: 2,    parent: 'rare',      need: 1, pos: [-5, 0] },
       { id: 'pollen',    branch: 'bounty', label: 'Altın Polen',     desc: 'Ayçiçeği ×2 para',         stat: 'sunflowerMul',   kind: 'add', per: 1,    max: 1, baseCost: 30000, growth: 1,    parent: 'sunflower', need: 2, pos: [-5, -1] },
       { id: 'skylily',   branch: 'bounty', label: 'Gök Zambağı',     desc: 'Haritada +1 gök zambağı',  stat: 'skylilyCount',   kind: 'add', per: 1,    max: 2, baseCost: 20000, growth: 2,    parent: 'sunflower', need: 1, pos: [-6, 0] },
     ],
