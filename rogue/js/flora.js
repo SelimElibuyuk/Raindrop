@@ -769,6 +769,20 @@
     fitCache[type] = res;
     return res;
   }
+  // Draw the icon framing of a bloomed plant straight into ctx, centred on (cx, cy) in a px-sized square
+  // (vector, no bitmap: used by the skill tree canvas so it stays sharp at every zoom).
+  function drawIcon(ctx, type, cx, cy, px) {
+    const T = TYPES[type] || TYPES.daisy;
+    const fit = iconFit(type, T);
+    if (fit) {
+      const s = px * ICON_FILL / Math.max(fit.w, fit.h);
+      draw(ctx, type, cx - fit.cx * s, cy - fit.cy * s, { size: T.h * s, growth: 1, bloom: 1 });
+    } else {
+      const unit = Math.min(px * 0.9 / (T.h * T.ic), px * 1.1 / T.wd);
+      const top = cy - T.h * T.ic * unit * 0.5;
+      draw(ctx, type, cx - T.cx * unit, top + T.h * unit, { size: T.h * unit, growth: 1, bloom: 1 });
+    }
+  }
   function icon(type, px) {
     px = Math.max(8, Math.round(px || 48));
     const dpr = Math.min(Math.max(1, (typeof window !== 'undefined' && window.devicePixelRatio) || 1), 3);
@@ -782,20 +796,12 @@
     // Frame the top T.ic of the bloomed plant (tall flowers are cropped so the head reads at icon size);
     // the ground point may fall below the canvas. The framed part is measured once from a reference
     // render so every icon fills its square the same way.
-    const fit = iconFit(type, T);
-    if (fit) {
-      const s = px * ICON_FILL / Math.max(fit.w, fit.h);
-      draw(g, type, px / 2 - fit.cx * s, px / 2 - fit.cy * s, { size: T.h * s, growth: 1, bloom: 1 });
-    } else {
-      const unit = Math.min(px * 0.9 / (T.h * T.ic), px * 1.1 / T.wd);
-      const top = px * 0.5 - T.h * T.ic * unit * 0.5;
-      draw(g, type, px / 2 - T.cx * unit, top + T.h * unit, { size: T.h * unit, growth: 1, bloom: 1 });
-    }
+    drawIcon(g, type, px / 2, px / 2, px);
     let url;
     try { url = c.toDataURL('image/png'); } catch (e) { url = ''; }
     iconCache[key] = url;
     return url;
   }
 
-  RD.Flora = { draw: draw, icon: icon, types: Object.keys(TYPES) };
+  RD.Flora = { draw: draw, icon: icon, drawIcon: drawIcon, types: Object.keys(TYPES) };
 })(window.RD = window.RD || {});

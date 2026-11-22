@@ -186,3 +186,40 @@ Açık: boss'ların gerçek oyunda his testi (özellikle Lale kollarının bulut
 - İlerleme simülasyonu (bot, her run sonrası en ucuz geliştirmeyi alıyor, medyan): Bölüm 1 boss'una 9. run'da ulaşıp 13.'de yeniyor,
   Bölüm 2: 24/25, Bölüm 3: 40/44. Önceden 3 bölüm ~15 run'da bitiyordu. Gerçek oyuncu biraz daha yavaş olur.
 - Görsel istekler: her bitkide boss tarzı su halkası, tomurcuklar daha büyük ve sulanana kadar hafifçe nefes alıyor.
+
+## 13. Boss sonrası yeni mekanikler (2026-11-21, kullanıcı kararları)
+- Her boss yenildikten sonra oyuncu yeni bir **mekaniğe** ulaşabilmeli.
+- **Mekaniklere kullanıcı karar verecek.** Claude'un önerdiği liste (sağanak, şimşek, gölet, gökkuşağı) beğenilmedi; öneri yapılmayacak.
+- Mekanik **yetenek ağacında** açılır. Boss'u yenmek mekaniği otomatik vermez; yalnızca ağaçtaki ilgili düğümün **satın alma kilidini** açar.
+  Düğüm boss yenilene kadar kilitli görünür (hangi boss'un açtığı belli olur), yenilince parayla alınabilir hâle gelir.
+- **Dengeleme** mekanikler eklendikten sonra yapılacak; mekanikler oynanışı hızlandıracağı için tempo hedefi o zaman belirlenecek.
+
+## 14. Run yapısı v2 (2026-11-22, kullanıcı kararları)
+Kaynak: kullanıcının yapılacaklar listesi (kritik, combo, özel upgrade, run içi kart seçimi, boss düzeni, zorlaşan yeşerme).
+- **Sayı gösterimi (hibrit):** yüzde yalnızca şans/ihtimal içeren yerlerde ("%10 ihtimalle ..."). Altın, hasar, su, adet gibi sabit değerler tam sayı. × çarpanlar kalır.
+- **Çiçekler sınırlı, hepsi baştan sahada:** çiçek sayısı belirgin şekilde artar ama açan çiçeğin yerine otomatik yenisi çıkmaz. Yeni çiçek yalnızca şansa bağlı özelliklerle (upgrade/kart) gelir. Bu, boss'a ikinci bir kapı olur: önce güçlendirme gerekir.
+- **Boss barı:** hem yeşerme hem çiçek doldurur. Yeşeren hücrenin puanı bölümün ihtiyacına göre ölçeklenir: **tüm alanın toplamı barın %30'u** eder (sınır/kesme yok, oran). Kalan %70 çiçeklerden gelir; çiçeksiz boss'a ulaşılamaz.
+- **Süre:** run 30 sn ile başlar, güçlendirmelerle ~90 sn'ye çıkabilir. Upgrade fikri: çiçek açtığında belirli bir ihtimalle süre eklenir.
+- **Erken bitiş (Claude önerisi, itiraz edilmedi):** süre, su veya çiçek hangisi önce biterse run biter; çiçek bitince boş bekleme olmaz.
+- **Kalan su:** run sonunda kalan su toprağa dökülür, yeşeren her alan çok az altın verir (ör. 1). Ağaçta geliştirilebilir ama hiçbir zaman çiçek sulamaktan kârlı olmaz.
+- **3. boss (Dev Ayçiçeği):** gölge/ısı döngüsü çok uzun ve sıkıcı. Mekanik baştan değişecek.
+- **Boss fikir havuzu (3 fikir, 3 farklı boss'ta kullanılacak; hangisi hangi boss'a, sonra karar):**
+  1. *Güneşe dönen baş:* baş yavaşça döner, yalnızca arkasından (gölge tarafı) sulanınca hasar alır; bulutla etrafında dolaşılır, ısı barı yok.
+  2. *Tohum saçma:* boss çevresine tohum saçar, fidana dönüşür; fidanları açtırmak boss'a hasar verir (combo/zincir ile uyumlu).
+  3. *Kısa aşamalar:* tek uzun döngü yerine 3 kısa aşama, her birinde farklı hareket; toplam süre kısa.
+- **Yeni combo:** süre penceresi kalkar. Combo, **aynı anda sulanan** bitkilerden gelir (önce açan bitki cezalandırılmaz). Çarpan güçlendirmelerle artar; mini bulutlar ve aynı anda sulama özellikleriyle beslenir.
+- **Sıradaki konular:** seviye atlayınca kart seçimi (seviye sulanan çiçek sayısına bağlı, boss'tan önce 2-3 seviye), kritik (çiçek çevresindeki noktalar ve/veya sulama sonrası hızlanma + yeşillik bonusu), seviye başına zorlaşan yeşerme.
+
+## 15. Çiçek ihtimali + ilerleme puanı (2026-11-22, kullanıcı kararları)
+- Run başında **10 kaktüs**; başka çiçek garanti değil. "Tohum" düğümleri bitki sayısını artırır.
+- Her çiçeğin bir **ihtimali** var: yerleşen bitki, en değerli çiçekten başlayarak zar atar; tutmazsa kaktüs.
+  Boss'la açılan çiçek bir başlangıç ihtimaliyle gelir (lale/gül/ayçiçeği %10); ağaçta her çiçek için "+%10 ihtimal" düğümü var (papatya dahil).
+- Her çiçek bara bir öncekinden fazla puan verir: kaktüs 1, papatya 2, lale 3, lavanta 4, çan 5, gül 6, ayçiçeği 7, gök zambağı 10.
+- Boss için gereken çiçek puanı: temel × çarpan (15 × 2^(bölüm−1) → 15, 30, 60). Barın %70'i bu puandan, %30'u yeşermeden.
+- Sayılar dengelemede ayarlanacak.
+
+## 16. Zorlaşan yeşerme + yeni fidan (2026-11-22, kullanıcı kararları)
+- Yeşerme her bölümde zorlaşır: hücre başına gereken su ve tam yeşillik × 1.7^(bölüm−1) (2. bölüm 1.7×, 3. bölüm ~2.9×). Zemine giden yağmur 1.5×'ten 1.2×'e indi.
+- "Tohum" düğümü: seviye başına +5 bitki (5 seviye). "Tohum Rüzgarı" da +5 bitki.
+- Tohum'a bağlı ayrı düğüm "Filizlenme": açan çiçek seviye başına +%1.5 ihtimalle yeni fidan bırakır (5 seviye, en fazla %7.5). "Tohum Kümesi" artık Filizlenme'nin altında.
+- (2026-11-22, revize) Yağmurla yeşerme tüm bölümlerde belirgin yavaşladı (zemine giden yağmur 1.2× → 0.5×). Çiçek açınca yeşeren küçük alan değişmedi.

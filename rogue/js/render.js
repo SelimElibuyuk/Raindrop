@@ -49,11 +49,11 @@
     damp: [122, 114, 78], grass: [118, 140, 86],
     // living grass (render-only greenery layer). Warmer and darker than RD.Flora's leaf greens so
     // young plants stay readable on a lush carpet. Carpet tones by growth: fresh olive -> deep lush.
-    carpet: ['#8a8e50', '#738842', '#5f813c', '#4f7b37'],
-    carpetL: ['#959a58', '#7e9349', '#6a8c42', '#5a873d'],
+    carpet: ['#a3b462', '#91b35b', '#82b056', '#74aa50'],
+    carpetL: ['#b0c06c', '#9fbf65', '#90bc60', '#83b85b'],
     // blades [dark, light] for young and mature grass
-    blades: [['#6f8a3f', '#9cad5c'], ['#56783a', '#88a853'], ['#40672c', '#76a04a']],   // young, mid, mature
-    clover: '#5f9a4c', cloverL: '#7db363',
+    blades: [['#829f49', '#b0c66c'], ['#6c9a45', '#a0c464'], ['#5a8f3e', '#91bf5c']],   // young, mid, mature
+    clover: '#6eae57', cloverL: '#90c870',
     wild: ['#f4efe1', '#f3dc7e', '#eeb5c3', '#c3b0e3'], wildC: '#e2a23c',
     // cloud: full (0) -> empty (1)
     cloudL0: '#f5f1ea', cloudL1: '#a9adba',
@@ -365,9 +365,11 @@
   // Clears dampness, grass and the greenery cache (new run).
   function resetWet(L) {
     L.wet.fill(0); L.soak.fill(0); L.spT = 0;
+    L.seed = (Math.random() * 0x7fffffff) | 0;   // new grass layout every run
     const gr = L.gr;
     if (gr) {
       gr.lvl.fill(0); gr.dirty.fill(0); gr.queue.length = 0; gr.t = 0; gr.any = false;
+      gr.geo = new Array(L.gw * L.gh);
       gr.g.setTransform(1, 0, 0, 1, 0, 0);
       gr.g.clearRect(0, 0, gr.cv.width, gr.cv.height);
     }
@@ -442,20 +444,23 @@
     let o = geo[k];
     if (o) return o;
     const cell = L.cell, x0 = (k % L.gw) * cell, y0 = ((k / L.gw) | 0) * cell;
-    const r = rng(Math.imul(k + 1, 2654435761) ^ 0x5bd1e995);
+    // Seeded per run (L.seed) so the layout differs every run, and loosely jittered so no cell grid shows
+    const r = rng(Math.imul(k + 1, 2654435761) ^ 0x5bd1e995 ^ (L.seed || 0));
     o = {};
     // carpet: one big rotated ellipse (neighbours overlap into a continuous, lumpy-edged carpet)
-    o.bx = x0 + cell * (0.4 + r() * 0.2); o.by = y0 + cell * (0.4 + r() * 0.2);
-    o.brx = cell * (0.82 + r() * 0.18); o.bry = o.brx * (0.72 + r() * 0.16); o.ba = (r() - 0.5) * 1.2;
+    o.bx = x0 + cell * (0.25 + r() * 0.5); o.by = y0 + cell * (0.25 + r() * 0.5);
+    o.brx = cell * (0.7 + r() * 0.38); o.bry = o.brx * (0.6 + r() * 0.3); o.ba = r() * 3.1416;
+    o.tone = Math.floor(r() * 3) - 1;   // -1..1: per-cell shade shift so equal growth is not one flat colour
     // lighter top-left patch on the carpet (two-tone)
     // (only on some cells and fairly large, so highlights merge into irregular sunlit areas, not a dot grid)
     o.lx = o.bx - cell * (0.05 + r() * 0.2); o.ly = o.by - cell * (0.08 + r() * 0.15); o.lr = cell * (0.5 + r() * 0.3);
     if (r() > 0.42) o.lr = 0;
     // tufts: [x, y, threshold, variant]; the later ones use the taller variants -> denser clumps
     o.tufts = [];
-    for (let t = 0; t < 5; t++) {
-      o.tufts.push([x0 + cell * (0.1 + r() * 0.8), y0 + cell * (0.32 + r() * 0.66), 0.22 + t * 0.11 + r() * 0.05,
-        (t >= 3 ? TUFT_VARIANTS / 2 : 0) + Math.floor(r() * TUFT_VARIANTS / 2)]);
+    const nt = 3 + Math.floor(r() * 4);   // 3..6 tufts
+    for (let t = 0; t < nt; t++) {
+      o.tufts.push([x0 + cell * (0.05 + r() * 0.9), y0 + cell * (0.25 + r() * 0.75), 0.22 + (t / nt) * 0.55 + r() * 0.08,
+        (t >= nt * 0.6 ? TUFT_VARIANTS / 2 : 0) + Math.floor(r() * TUFT_VARIANTS / 2)]);
     }
     o.tufts.sort(function (a, b) { return a[1] - b[1]; });
     // clover (about a third of the cells) and a wildflower (about a quarter)
@@ -485,8 +490,9 @@
         let open = false;
         for (let q = 0; q < list.length; q++) {
           const k = list[q], c = carpetOf(lvl[k] / LV);
-          if (c <= 0 || Math.min(3, (c * 4) | 0) !== b) continue;
+          if (c <= 0) continue;
           const o = cellGeo(L, k);
+          if (Math.max(0, Math.min(3, ((c * 4) | 0) + o.tone)) !== b) continue;
           let x, y, rx, ry;
           if (pass === 0) { x = o.bx; y = o.by; rx = o.brx * c; ry = o.bry * c; }
           else {
@@ -641,7 +647,7 @@
     if (!force && soilT < tick) return;
     const step = force ? 1 : SOIL_GROW * soilT;
     soilT = 0;
-    const g = run.greenCell || 32, sgw = run.gw, sgh = run.gh, lush = C.lushSoil || 8;
+    const g = run.greenCell || 32, sgw = run.gw, sgh = run.gh, lush = run.lushSoil || C.lushSoil || 8;
     const cell = L.cell, gw = L.gw, gh = L.gh, soak = L.soak;
     let nz = L.noise;
     if (!nz || nz.length !== soak.length) {
@@ -1312,7 +1318,7 @@
     const gx = hx, gy = hy - 36, gr = 13;
     ctx.lineCap = 'round';
     ctx.lineWidth = 5;
-    ctx.strokeStyle = 'rgba(21,17,43,0.7)';
+    ctx.strokeStyle = 'rgba(36,25,18,0.7)';
     ctx.beginPath(); ctx.arc(gx, gy, gr, Math.PI, 2 * Math.PI); ctx.stroke();
     ctx.lineWidth = 3.2;
     const blink = boss.scorched ? 0.55 + 0.45 * Math.sin(clock * 14) : 1;
@@ -1455,7 +1461,13 @@
 
   function handleEvents(run) {
     for (const e of run.events) {
-      if (e.type !== 'bloom') { if (e.type.indexOf('boss') === 0) bossEvent(e, run); continue; }
+      if (e.type !== 'bloom') {
+        if (e.type.indexOf('boss') === 0) bossEvent(e, run);
+        else if (e.type === 'time' && popups.length < MAX_POPUPS) {
+          popups.push({ x: e.x, y: e.y - 70, text: '+' + (e.sec || 1) + ' sn', age: 0, life: 1.2, big: true, color: '#ffe9a8', edge: 'rgba(60,40,10,0.85)' });
+        }
+        continue;   // 'seedling' and other events need no fx
+      }
       const col = C.plants[e.plantType].bloom, ph = (PLANT_SIZE[e.plantType] || 50) * BLOOM_BOOST;
       for (let i = 0; i < 9 && particles.length < MAX_PARTICLES; i++) {
         const a = Math.random() * 6.283, sp = 40 + Math.random() * 60;

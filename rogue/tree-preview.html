@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Yetenek Ağacı Önizleme</title>
+<style>
+  html, body { margin: 0; background: #15112b; color: #f7eddb; font-family: system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 1280px; margin: 0 auto; padding: 32px 40px 64px; }
+  h1 { font-size: 28px; margin: 0 0 24px; }
+  h2 { font-size: 18px; margin: 36px 0 14px; opacity: .85; }
+  .row { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+  .cell { text-align: center; font-size: 14px; }
+  .cell canvas { display: block; margin: 0 auto 6px; }
+  button { background: #f7eddb; color: #15112b; border: 0; border-radius: 8px; padding: 10px 18px; font-size: 15px; cursor: pointer; margin-bottom: 12px; }
+  button:hover { background: #fff6e4; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Yetenek Ağacı: Toprak Karoları ve Sarmaşık</h1>
+
+  <h2>Karo seviyeleri (merkezde yer tutucu ikon)</h2>
+  <div class="row" id="levels"></div>
+
+  <h2>Sarmaşıkla bağlı zincir</h2>
+  <button id="replay">Sarmaşığı tekrar büyüt</button>
+  <div><canvas id="chain"></canvas></div>
+
+  <h2>Max karolar: farklı tohumlar</h2>
+  <div class="row" id="seeds"></div>
+
+  <h2>Kurak arazi ve yeşerme</h2>
+  <div class="row" style="align-items:center;gap:16px;margin-bottom:12px">
+    <button id="grow" style="margin:0">0.8 sn'de büyüt</button>
+    <label for="prog">İlerleme</label>
+    <input id="prog" type="range" min="0" max="1" step="0.01" value="1" style="width:320px">
+    <span id="progv">1.00</span>
+  </div>
+  <div><canvas id="field"></canvas></div>
+
+  <h2>HUD barları</h2>
+  <div id="growrow"></div>
+  <div class="row" style="align-items:center;gap:16px;margin:16px 0">
+    <label for="gprog">Büyüme çubuğu</label>
+    <input id="gprog" type="range" min="0" max="1" step="0.005" value="0.4" style="width:320px">
+    <span id="gprogv">0.40</span>
+  </div>
+  <div><canvas id="growlive"></canvas></div>
+  <div class="row" style="margin-top:24px" id="waterrow"></div>
+</main>
+
+<script src="js/treeart.js"></script>
+<script src="js/flora.js"></script>
+<script src="js/hudart.js"></script>
+<script>
+(function () {
+  'use strict';
+  const T = window.RD.TreeArt;
+  const DPR = window.devicePixelRatio || 1;
+
+  function makeCanvas(canvas, w, h) {
+    canvas.width = Math.round(w * DPR); canvas.height = Math.round(h * DPR);
+    canvas.style.width = w + 'px'; canvas.style.height = h + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    return ctx;
+  }
+  function icon(ctx, x, y) {            // placeholder drop icon
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.beginPath(); ctx.arc(x, y + 4, 13, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(x, y - 20); ctx.lineTo(x + 11, y - 2); ctx.lineTo(x - 11, y - 2); ctx.closePath(); ctx.fill();
+  }
+  function cell(parent, label, opts, size, withIcon) {
+    const d = document.createElement('div'); d.className = 'cell';
+    const c = document.createElement('canvas');
+    const pad = 150;
+    const ctx = makeCanvas(c, pad, pad);
+    T.drawTile(ctx, pad / 2, pad / 2, size, opts);
+    if (withIcon) icon(ctx, pad / 2, pad / 2);
+    d.appendChild(c); d.appendChild(document.createTextNode(label));
+    parent.appendChild(d);
+  }
+
+  const levels = document.getElementById('levels');
+  cell(levels, 'Kilitli', { locked: true, level: 0, max: 5, seed: 7 }, 120, true);
+  for (let i = 0; i < 4; i++) cell(levels, 'Seviye 0 (' + (i + 1) + ')', { level: 0, max: 5, seed: 7 + i * 13 }, 120, true);
+  for (let i = 1; i <= 4; i++) cell(levels, i + '/5', { level: i, max: 5, seed: 7 }, 120, true);
+  cell(levels, 'Max (5/5)', { level: 5, max: 5, seed: 7 }, 120, true);
+
+  const seeds = document.getElementById('seeds');
+  for (let s = 1; s <= 4; s++) cell(seeds, 'Tohum ' + s, { level: 5, max: 5, seed: s * 11 }, 120, false);
+
+  // vine chain
+  const W = 840, H = 190, nodes = [
+    { x: 90, o: { level: 5, max: 5, seed: 3 } },
+    { x: 310, o: { level: 3, max: 5, seed: 4 } },
+    { x: 530, o: { level: 1, max: 5, seed: 5 } },
+    { x: 750, o: { locked: true, level: 0, max: 5, seed: 6 } }
+  ];
+  const chain = document.getElementById('chain');
+  const cctx = makeCanvas(chain, W, H);
+  const Y = H / 2, SZ = 110, GT = T.VINE_GROW_TIME;
+  function ease(t) { const u = 1 - clamp(t); return 1 - u * u * u; }
+  function clamp(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+  function renderChain(t) {             // t = seconds since replay start; links 0,1 grow in sequence
+    cctx.clearRect(0, 0, W, H);
+    for (let i = 0; i < 3; i++) {
+      const a = nodes[i], b = nodes[i + 1], locked = i === 2;
+      T.drawVine(cctx, a.x, Y, b.x, Y, { progress: locked ? 1 : ease((t - i * GT) / GT), locked: locked, seed: 20 + i });
+    }
+    nodes.forEach(function (n) { T.drawTile(cctx, n.x, Y, SZ, n.o); icon(cctx, n.x, Y); });
+  }
+  let raf = 0;
+  function play() {
+    cancelAnimationFrame(raf);
+    const t0 = performance.now();
+    (function step(now) {
+      const t = (now - t0) / 1000;
+      renderChain(t);
+      if (t < GT * 2) raf = requestAnimationFrame(step); else renderChain(GT * 2);
+    })(t0);
+  }
+  document.getElementById('replay').addEventListener('click', play);
+  play();
+
+  // dry land + greenery
+  const FW = 1100, FH = 600;
+  const field = document.getElementById('field');
+  const fctx = makeCanvas(field, FW, FH);
+  const soil = document.createElement('canvas');
+  soil.width = Math.round(FW * DPR); soil.height = Math.round(FH * DPR);
+  const sctx = soil.getContext('2d');
+  sctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  T.drawSoil(sctx, 0, 0, FW, FH, { seed: 5 });
+  // fake nodes: x, y, max radius, level (0 = no patch), root has green 1 always
+  const fnodes = [
+    { x: 160, y: 300, r: 150, root: true },
+    { x: 330, y: 220, r: 160 }, { x: 330, y: 400, r: 140 },   // overlap each other and the root
+    { x: 520, y: 150, r: 130 }, { x: 560, y: 320, r: 160 },
+    { x: 760, y: 430, r: 150 }, { x: 800, y: 230, r: 120 },
+    { x: 980, y: 340, r: 90, locked: true }, { x: 960, y: 140, r: 100 }
+  ];
+  function renderField(t) {
+    fctx.clearRect(0, 0, FW, FH);
+    fctx.drawImage(soil, 0, 0, FW, FH);
+    const patches = [];
+    fnodes.forEach(function (n) {
+      if (n.locked) return;
+      const g = n.root ? 1 : t;
+      patches.push({ x: n.x, y: n.y, r: n.root ? 150 : 70 + (n.r - 70) * t, green: g });
+    });
+    T.drawGreenery(fctx, patches, { seed: 5 });
+    fnodes.forEach(function (n, i) {
+      T.drawTile(fctx, n.x, n.y, n.root ? 96 : 76, { level: n.root ? 5 : Math.round(t * 5), max: 5, locked: !!n.locked, seed: i + 1 });
+    });
+  }
+  const prog = document.getElementById('prog'), progv = document.getElementById('progv');
+  let fraf = 0;
+  function setProg(v) { prog.value = v; progv.textContent = (+v).toFixed(2); renderField(+v); }
+  prog.addEventListener('input', function () { cancelAnimationFrame(fraf); setProg(prog.value); });
+  document.getElementById('grow').addEventListener('click', function () {
+    cancelAnimationFrame(fraf);
+    const t0 = performance.now(), D = T.VINE_GROW_TIME * 1000;
+    (function step(now) {
+      const u = clamp((now - t0) / D);
+      setProg(1 - Math.pow(1 - u, 3));
+      if (u < 1) fraf = requestAnimationFrame(step);
+    })(t0);
+  });
+  setProg(1);
+
+  // HUD bars
+  const HA = window.RD.HudArt;
+  const growrow = document.getElementById('growrow');
+  [0, 0.25, 0.5, 0.75, 1].forEach(function (f) {
+    const d = document.createElement('div'); d.className = 'cell'; d.style.marginBottom = '14px';
+    const c = document.createElement('canvas'), x = makeCanvas(c, 520, 30);
+    HA.drawGrowBar(x, 520, 30, f, { seed: 3, t: 0, bossType: 'tulip' });
+    d.appendChild(c); d.appendChild(document.createTextNode('frac ' + f));
+    growrow.appendChild(d);
+  });
+  const gl = document.getElementById('growlive'), glx = makeCanvas(gl, 520, 30);
+  const gprog = document.getElementById('gprog'), gprogv = document.getElementById('gprogv');
+  gprog.addEventListener('input', function () { gprogv.textContent = (+gprog.value).toFixed(2); });
+  const waterrow = document.getElementById('waterrow'), wbars = [];
+  [[1, false, 'frac 1'], [0.5, false, 'frac .5'], [0.2, true, 'frac .2 (düşük)']].forEach(function (a) {
+    const d = document.createElement('div'); d.className = 'cell';
+    const c = document.createElement('canvas'), x = makeCanvas(c, 220, 22);
+    d.appendChild(c); d.appendChild(document.createTextNode(a[2])); waterrow.appendChild(d);
+    wbars.push({ x: x, f: a[0], low: a[1] });
+  });
+  (function hudLoop(now) {
+    const t = now / 1000;
+    glx.clearRect(0, 0, 520, 30);
+    HA.drawGrowBar(glx, 520, 30, +gprog.value, { seed: 3, t: t, bossType: 'tulip' });
+    wbars.forEach(function (b) { b.x.clearRect(0, 0, 220, 22); HA.drawWaterBar(b.x, 220, 22, b.f, { t: t, low: b.low }); });
+    requestAnimationFrame(hudLoop);
+  })(performance.now());
+})();
+</script>
+</body>
+</html>

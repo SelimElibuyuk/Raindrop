@@ -95,11 +95,11 @@
       C.levels.forEach(function (lv) { if (Meta.data.level > lv.id && lv.unlocks) set[lv.unlocks] = true; });
       return set;
     },
-    // Flower that a stat belongs to (countStat/bonusStat/mulStat), or null.
+    // Flower that a stat belongs to (chanceStat/bonusStat/mulStat), or null.
     flowerOfStat: function (stat) {
       for (const t in C.plants) {
         const p = C.plants[t];
-        if (p.countStat === stat || p.bonusStat === stat || p.mulStat === stat) return t;
+        if (p.chanceStat === stat || p.bonusStat === stat || p.mulStat === stat) return t;
       }
       return null;
     },
@@ -115,12 +115,19 @@
       return Meta.levelOf(u.parent) >= 1;
     },
 
-    // 'owned' (level>0, not max) | 'maxed' | 'available' (buyable once affordable) | 'locked' (visible, parent level too low) | 'hidden'
+    // Boss gate: open when the node has no gate or that level's boss is beaten (data.level > gate).
+    gateOpen: function (u) {
+      return !u || !u.gate || Meta.data.level > u.gate;
+    },
+
+    // 'owned' (level>0, not max) | 'maxed' | 'gated' (visible, boss not beaten) | 'available' (buyable once affordable)
+    // | 'locked' (visible, parent level too low) | 'hidden'
     nodeState: function (id) {
       const u = upgradeById(id);
       if (!u || !Meta.isVisible(id)) return 'hidden';
       const lv = Meta.levelOf(id);
       if (lv >= u.max) return 'maxed';
+      if (lv === 0 && !Meta.gateOpen(u)) return 'gated';
       if (!Meta.isUnlocked(id)) return 'locked';
       return lv > 0 ? 'owned' : 'available';
     },
@@ -148,6 +155,7 @@
     isUnlocked: function (id) {
       const u = upgradeById(id);
       if (!u) return false;
+      if (!Meta.gateOpen(u)) return false;
       if (!u.parent) return true;
       return Meta.levelOf(u.parent) >= (u.need || 1);
     },
@@ -194,6 +202,7 @@
       const eff = Meta.upgradeEffect(u.id, lv);
       if (u.kind === 'mul') s[u.stat] = s[u.stat] * (1 + eff);
       else s[u.stat] = s[u.stat] + eff;
+      if (u.also) s[u.also.stat] = (s[u.also.stat] || 0) + u.also.per * lv;   // optional second flat stat per level
     });
     return s;
   };

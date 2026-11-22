@@ -120,3 +120,263 @@ RD.Meta.settings and save; they apply on the next run start.
 - Boss win: `run.over` + `endReason 'boss'`, then main.js calls `run.victoryStep(dt)` each frame until it returns true.
   `run.sweep = { x, y, r, max, done, coins, blooms }`: a wave grows from the boss; cells inside r become lush (soil = lushSoil),
   every growing plant it passes blooms (normal `bloom` event with `victory: true`). `result()` adds bossReward, sweepCoins, sweepBlooms.
+
+## Skill tree art: soil tiles + vines (2026-11-21, js/treeart.js)
+
+Design source: user sketch (Excalidraw). A node is a rounded-square soil tile that greens as it levels up;
+nodes are linked by a leafy vine instead of a straight line. Canvas 2D only, flat vector like flora.js
+(solid fills, dark soft outline, no blur/shadowBlur/ctx.filter, no gradients beyond flat bands).
+
+```js
+RD.TreeArt.drawTile(ctx, cx, cy, size, {
+  level, max,        // integers; green = level / max (0 = bare cracked soil, 1 = fully lush)
+  locked,            // true → bare soil + darkened (clearly unavailable), ignores level
+  palette,           // optional array of flower colours for max level (≥ 3 distinct hues); default mixed
+  seed,              // integer; cracks, grass curls and flower spots are deterministic per seed
+  selected,          // optional: thick outline highlight
+})
+RD.TreeArt.drawVine(ctx, ax, ay, bx, by, {
+  progress,          // 0..1 how far the vine has grown from A to B (animation drives this)
+  locked,            // true → dry thin brown twig/stub, no leaves (path not yet open)
+  seed,
+})
+RD.TreeArt.tileImage(opts, px) -> cached data URL of drawTile at px×px (for DOM nodes)
+RD.TreeArt.VINE_GROW_TIME = 0.8   // seconds, ease-out; never above 1 s
+```
+
+Visual rules:
+- level 0 / locked: tan soil (#cdb3a6-ish) with dark brown wavy cracks, dark outline.
+- locked: same soil, multiplied darker (about 45% dimmer) so it reads as unavailable at a glance.
+- 0 < green < 1: wavy grass rim grows from the edges inward; bare soil patch in the middle shrinks
+  (patch inset ∝ green). Level 1 of N already shows a visible green rim.
+- green = 1 (max): whole tile lush green with darker grass curls; 3–5 small flat flowers on the
+  corners/edges in at least 3 different colours (never one colour, never one flower shape repeated alone).
+- The skill icon is NOT drawn by TreeArt; it is overlaid on top (DOM icon) and must stay readable:
+  keep the tile centre calm (no busy curls in the middle ~40%).
+- Vine: green stem with a gentle sine wobble + small alternating leaves; grows from A to B with progress.
+
+## Skill tree screen: dry ground that greens with progress (2026-11-21 b)
+
+User direction: the whole tree background is dry cracked land; buying/levelling nodes greens the land
+around them. Nodes are TreeArt tiles, links are TreeArt vines. Desktop web only (1280–1920 wide).
+
+### New TreeArt API (js/treeart.js)
+```js
+RD.TreeArt.drawSoil(ctx, x, y, w, h, { seed })
+  // Static dry field over the rect: flat tan/brown base with a few tone patches, scattered random
+  // cracks (same crack style as tiles, larger/longer, sparse), tiny pebbles. Deterministic per seed.
+  // Callers cache it (offscreen canvas) — it is drawn once per tree build / resize, never per frame.
+RD.TreeArt.drawGreenery(ctx, patches, { seed })
+  // patches: [{ x, y, r, green }]  (world px; green 0..1 = node level/max)
+  // Each patch is an organic wavy green blob of radius r (bumpy edge, grass tufts poking out, tonal
+  // blobs, clovers — same vocabulary as tile grass). Overlapping patches must merge into one lawn
+  // (draw all fills first, then all edges/details, so no outlines inside overlaps).
+  // green === 1 → also 3–6 small multi-colour flowers scattered in the patch (never one colour).
+  // Must be cheap enough to redraw every frame for ~35 patches during a 0.8 s animation.
+```
+
+### Tree screen layering (js/ui.js, style.css)
+- `.tree-world` holds: `<canvas class="tree-ground">` (bottom) + node buttons (top). The SVG `.tree-lines` is removed.
+- Ground canvas covers the node bounds + 480 px margin each side (world coords), positioned with
+  left/top in world px; backing size = css size × min(devicePixelRatio, 2), capped so neither side
+  exceeds 4096 px. It pans/zooms with `.tree-world`.
+- Per draw: blit the cached soil, then `drawGreenery(patches)`, then all vines
+  (`drawVine(parent centre → child centre)`; `locked` when the child level is 0, else progress 1).
+- Patch per node: root `{ r: 115, green: 1 }`; owned node `r = 46 + 64 × level/max`, `green = level/max`;
+  level 0 / locked → no patch. The viewport background outside the canvas uses the soil base colour.
+- Node button = rounded square (radius ≈ 22 % of size), size 76 px (root 96 px), background-image =
+  `RD.TreeArt.tileImage({ level, max, locked, seed: node index }, size × 2)` shown at 100/88 % so the
+  tile body fills the button (flowers may overhang). States: locked → `locked: true` + lock icon;
+  available level 0 → bare soil; owned → level/max; maxed → level = max; root → level = max.
+  Icon stays centred and readable (light icon with a dark soft backing disc or dark outline).
+  Pips + cost badge + label keep their current behaviour.
+- Buy animation: when a node's level increases, over `RD.TreeArt.VINE_GROW_TIME` (ease-out) its patch
+  radius tweens old → new, and on 0 → 1 the vine from its parent grows progress 0 → 1. Redraw the
+  ground canvas per animation frame only while a tween runs. `prefers-reduced-motion` → jump to end.
+
+## Skill tree: crisp rendering at any zoom (2026-11-21 c)
+
+Problem: tiles (tileImage at 2× CSS size), the ground (one world-sized bitmap, capped at 4096 px) and
+flower icons (Flora.icon 64 px) were rasterised once and then scaled by the CSS zoom transform → blurry.
+Rule: every bitmap is rendered at the pixel size it is shown at (CSS size × zoom × devicePixelRatio).
+
+- Ground: a screen-space `<canvas class="tree-ground">` that fills `.tree-vp` (NOT inside `.tree-world`),
+  backing size = vp size × DPR (no 2× cap). Each redraw: `ctx.setTransform(DPR·z, 0, 0, DPR·z, DPR·x, DPR·y)`
+  with the tree view `{x, y, z}`, then drawSoil (world rect = visible world area, or the full ground bounds),
+  drawGreenery, the night tint, vines — all vector, so it is sharp at every zoom.
+  - Soil caching: soil is static, so it may be cached in an offscreen canvas rendered at the CURRENT
+    z × DPR for the full ground bounds (cap ~16 M pixels; above that draw it live). Re-render that cache
+    only when z changes (debounced ~120 ms after the last zoom step; until then blit the old cache scaled).
+    Panning never re-renders the cache, it only blits it with the new offset.
+  - Redraw the ground canvas on pan, zoom, resize, renderShop and while a buy tween runs — coalesced into
+    one requestAnimationFrame. The soil must keep the same random layout at every zoom (fixed seed, world coords).
+  - Soil-colour bounds: outside the ground bounds fill with SOIL_BG so panning never shows an edge.
+- Tiles and flower icons: render at `round(cssSize × z × DPR)` px (bucket the size to steps of ~16 px to
+  limit cache entries). Re-render node images when z settles (same debounce), not every zoom step.
+- Must stay smooth: pan/zoom ≥ 50 fps on the tree at 1920×1080 with ~35 nodes; measure.
+
+## Skill tree: whole-tree art canvas (2026-11-21 d) — supersedes "crisp rendering at any zoom"
+User direction: draw everything once, directly in vector (like the game), never as images.
+- `.tree-world` (translate only, rounded to device px) holds `canvas.tree-art` + `div.tree-nodes`.
+- `tree-art` covers the whole land (node bounds + GROUND_MARGIN) at zoom × DPR (area capped at 40 M px).
+  `redrawArt()` paints, in vector: soil, lawn patches, night tint, vines, tile rim + bottom edge, `drawTile`,
+  icon disc, flower icons via `RD.Flora.drawIcon(ctx, type, cx, cy, px)`. No tileImage / Flora.icon in the tree.
+- Pan: no redraw. Zoom: `.tree-nodes` gets CSS `zoom` (DOM text/SVG re-laid out → sharp), the canvas is
+  stretched until the zoom settles (140 ms) and is then redrawn once at the new scale.
+- Buy tween: `paintArt(rect)` repaints only the dirty rect around the bought node per frame.
+- DOM node buttons are transparent hit targets carrying the SVG icon, pips, cost badge, label, selection
+  outline and can-buy pulse.
+
+## HUD redesign (2026-11-21 e) — desktop web (1280–1920), same language as the tree
+Goal: the run HUD matches the tree: chunky "tile" panels and themed bars drawn directly in vector.
+Game logic, run fields and updateHud's data flow stay the same; only markup/style/drawing change.
+
+### Panel style (all HUD panels)
+- background `#1d1839` at .94 alpha, radius 18px, rim + raised edge like tree tiles:
+  `box-shadow: 0 0 0 3px rgba(13,10,31,.6), 0 7px 0 3px rgba(13,10,31,.5)`. Cream text (#f7eddb), numbers in
+  `var(--mono)` 700. No blur, no gradients, no glow. Nothing in the HUD takes pointer events.
+
+### Layout (absolute, top of the screen, 20px from edges)
+- Top-left **water panel**, width 340px, height 64px: big drop icon (32px, water blue) + water bar canvas
+  (flex, 22px tall) + number "64/100" (22px). Low water (< 1/4 tank) → bar turns coral, number coral.
+- Top-centre **level panel**, width min(560px, 42vw): title row "Bölüm 1 · Çatlak Vadi" (14px, 600, cream2)
+  and right-aligned "64/110" (16px mono); below a grow-bar canvas 30px tall that ends in the boss flower bud.
+  When the boss spawns the same panel becomes the boss panel: boss name in gold (18px, 800) + its bars
+  (arms: 3 segments; shield: "Dikenler" + "Gövde"; shade: "Su" + "Sıcaklık"), bars 14px tall, CSS-styled flat
+  fills with the same rounded dark track; scorched blink / shield-open green as today.
+- Top-right: **timer dial** 72px circle panel (SVG ring 6px stroke, number 24px inside; ≤5 s coral) and to its
+  left a **coin panel** height 64px (gold coin 30px + number 26px gold). Evap mode shows its meter panel in
+  the timer's place (same style).
+- **Combo badge** under the timer dial, right-aligned: gold tile (`--gold`, rim `--gold-ed`), "×1.75" 24px
+  `--on-gold`, a thin ring/bar of the combo window; pop animation kept; hidden when combo ≤ 1.
+- **Boss toast**: centred at 28vh, max-width 440px, same panel style with a 3px gold inner rim; flower
+  icon 96px, title 26px, hint 16px. Animation unchanged; reduced motion respected.
+- Debug gear stays top-right corner; keep HUD clear of it (right offset ≥ 64px).
+
+### js/hudart.js → RD.HudArt (vector, cheap: < 0.5 ms per call at these sizes, called every frame)
+```js
+RD.HudArt.drawGrowBar(ctx, w, h, frac, { seed, t, bossType })
+  // Rounded track. Unfilled: tan soil (TreeArt soil tones) with a few small seeded cracks.
+  // Filled 0..frac from the left: lawn green with a wavy bumpy front edge, small grass tufts, and a few
+  // tiny multi-colour flowers that appear as the fill passes their positions. Dark rim like tiles.
+  // bossType: draws that flower (RD.Flora.draw) at the right end, growth/bloom rising with frac
+  // (bud at 0, open at 1), drawn slightly larger than h so it pokes out of the bar. Reserve ~h*1.3 px for it.
+RD.HudArt.drawWaterBar(ctx, w, h, frac, { t, low })
+  // Rounded dark track; water fill with an animated gentle wave on its right edge (t = seconds),
+  // two or three small light bubbles drifting; low → coral instead of water blue. Dark rim.
+```
+Both take CSS-pixel w/h; the caller sets `ctx.setTransform(dpr,0,0,dpr,0,0)` and the backing store = css × DPR
+(redo on resize/DPR change). Shape randomness precomputed per seed (no per-frame allocation).
+
+## Minimal UI style (2026-11-21 f) — applies to every screen
+User-approved direction after the HUD: no boxes, no panel backgrounds, no rounded frames (they read as a mobile game).
+- Text/icons sit on the scene with the HUD outline: `text-shadow: 0 2px 0 var(--ink), 1px 0 0 var(--ink), -1px 0 0 var(--ink),
+  0 -1px 0 var(--ink), 0 0 4px rgba(var(--deep-rgb), .6)` where `--ink: rgba(var(--deep-rgb), .9)`; icons `filter: drop-shadow(0 2px 0 …)`.
+- Overlays (results, tree screen) use a flat dim of the scene: `rgba(var(--bg-rgb), .72)` full-screen, no card behind content.
+  Content is centred in a column (max-width ~560px) with clear type hierarchy: title 40px/800, sub 18px, rows 18px with
+  right-aligned mono numbers separated by thin 1px lines `rgba(247,237,219,.14)`, total 34px gold mono.
+- Buttons: flat fill, radius 6px, height 52px, 18px/700 text, no bottom-edge bevel, hover = slightly lighter fill,
+  active = 1px down; primary water blue (`--on-water` text), gold for buy, secondary = transparent with 2px cream outline.
+  Focus-visible ring kept. Min target 44px.
+- Tree screen chrome: header and level strip without backgrounds (outlined text over the dim/land), detail panel = no card:
+  a right-side column over a vertical dim strip `rgba(var(--bg-rgb), .78)` with straight edges; zoom buttons as small flat square
+  buttons; footer CTA flat without bar background.
+- Keep all behaviour and ids; only markup classes/CSS change where needed.
+
+## Boss-gated tree nodes (2026-11-21 g, PRD §13)
+Mechanics are tree nodes whose purchase is locked until a level's boss has been beaten (never auto-granted).
+- Upgrade field `gate: <levelId>` (optional). Gate is open when `Meta.gateOpen(u)` → `!u.gate || Meta.data.level > u.gate`
+  (same rule as `unlockedFlowers`: level N's boss beaten ⇔ data.level > N).
+- Visibility: a gated node follows the normal rules (`isVisible`: parent level ≥ 1, flower rule). Being gated does NOT hide it.
+- `nodeState` adds `'gated'`: visible, level 0, gate closed (checked before 'locked'/'available'). `isUnlocked`/`canBuy` false while gated.
+  Children of a gated node stay hidden (parent level 0), so the gate also hides the mechanic's own sub-branch.
+- Tree view: gated tile = locked (dark) tile, but the icon is the gating boss's flower (`C.levels[gate-1].boss.type`, drawn on
+  the art canvas like flower icons) with a small lock badge; label shows the node name (not "?"). Detail panel: name, desc, and
+  footer "Gereken: <boss.label> yenilmeli" with a disabled "Al". When the gate opens the node renders as a normal 'available' node.
+- Debug panel "Bölümü seç" already changes data.level, which opens/closes gates — use it to test.
+- No real mechanic nodes are added yet (the user will define them). Test with a temporary node injected in memory only.
+
+## Run structure v2 (2026-11-22 h, PRD §14)
+Supersedes the combo window and respawn rules above (lines on comboTimer / respawnDelay).
+
+**Config** (`js/config.js`): `base.plantCount` 24, `base.timeChance` 0 (%), `base.leftoverGold` 0, `comboWindow` and
+`respawnDelay` removed, `modes.timer.baseTime` 30, `greenShare` 0.3, `timeChanceSec` 1, `leftover {waterPerArea, gold}`,
+`bloomPoints` removed, every level has `bloomNeed`. Tree: node `combo` replaced by `puddle` (stat leftoverGold),
+new `sundial` (stat timeChance, child of time1).
+
+**Flowers (run.js)**: all `stats.plantCount` plants are placed in the constructor; a bloomed plant is NOT replaced
+(no `_respawn`). Keep a public `spawnSeedling()` (= `_spawnPlant()` + push a `{type:'seedling', x, y}` event) for
+future chance cards. Rebloom (sunflower) unchanged.
+
+**Level bar**: `_initGreen` sets `this.greenPts = C.greenShare * barTarget / (gw * gh)`; a newly greened cell adds
+`greenPts` (fractional). A bloom adds `(1 − C.greenShare) * barTarget / level.bloomNeed`. barPoints may be fractional;
+UI shows it rounded. On resize keep greenPts unchanged (computed once).
+
+**Combo** (no timer): at the start of the watering step count `n` = growing plants inside the rain circle while raining.
+Every bloom in that frame uses `this.combo = min(s.comboMax, 1 + s.comboStep * (n − 1))` (n ≥ 1). When not raining or
+n ≤ 1, `this.combo = 1`. `this.comboN = n` (plants counted) is public for the HUD. `bestCombo` unchanged.
+`comboTimer` is removed. Lavender comboX still applies when combo > 1.
+
+**Time chance**: on each bloom, if `timeLimit > 0` and `Math.random() * 100 < s.timeChance`, `timeLimit += C.timeChanceSec`
+and push event `{type:'time', x, y, sec}`.
+
+**End conditions**, in order: water ≤ 0 → 'water'; time → 'time'; no plant in state 'growing' and no boss active
+(`!this.boss`) → 'flowers'. Boss fights keep running even when no flowers are left.
+
+**Leftover water** (in `_finish`, except reason 'water'): `areas = floor(water / C.leftover.waterPerArea)`,
+`leftoverGold = areas * (C.leftover.gold + s.leftoverGold)`; add to `this.coins`; `result()` gains
+`leftoverAreas`, `leftoverGold` (0 when none). Water itself is not changed.
+
+**UI**: HUD combo shows `×combo` with the count of plants under rain (no timer bar); the combo bar element is hidden or
+repurposed. Result screen: when `leftoverGold > 0` a row "Kalan su: N alan yeşerdi  +G". `END_TEXT.flowers` =
+"Çiçek kalmadı". Stat labels: `timeChance` → 'Ek süre ihtimali' shown with '%' (chance rule), `leftoverGold` →
+'Kalan su altını'. Remove comboWindow labels. Popup for event 'time': "+1 sn".
+
+**Clusters (2026-11-22 i):** `base.clusterSize` 1 (tree node `cluster` "Tohum Kümesi", +1 per level, max 3 → 4).
+`Run._spawnInitial(n)` places groups of clusterSize: a center from `_findSpot()`, then members ~CLUSTER_GAP (26 px)
+around it via `_clusterSpot()`. Base = spread out, so early combos are rare by design.
+
+## Flower chances + bar points (2026-11-22 j, PRD §15)
+Supersedes countStat / filler weight and level.bloomNeed.
+- **Config:** `base.plantCount` 10; per-flower `<flower>Chance` stats (%, from tree nodes); each plant has `bar`
+  (progress points: cactus 1, daisy 2, tulip 3, lavender 4, bluebell 5, rose 6, sunflower 7, skylily 10),
+  `chanceStat`, `baseChance` (% granted once the flower is unlocked; tulip/rose/sunflower 10, others 0).
+  `weight` and `countStat` are gone. `CONFIG.bossNeed {base 15, mul 2}`; levels have no `bloomNeed`.
+- **Placement (run.js `_pickType`):** for every placed plant, go through the unlocked flowers (`this.flowers`, null =
+  all) that have a chanceStat, sorted by `bar` descending; chance = baseChance + stats[chanceStat]; first roll that hits
+  (`Math.random()*100 < chance`) picks that type. No hit → 'cactus'. Cactus is always allowed.
+- **Bar:** `bloomNeed = C.bossNeed.base * Math.pow(C.bossNeed.mul, level.id − 1)` (computed in the constructor,
+  `this.bloomNeed`, public). A bloom adds `(1 − C.greenShare) * barTarget * cfg.bar / bloomNeed` (cfg.bar default 1).
+- **Meta:** `flowerOfStat` must match `chanceStat` (instead of countStat) so a flower's chance node is buyable only
+  after the flower is unlocked.
+- **UI:** stats ending in `Chance` render as "%N" (same as timeChance). Labels: daisyChance 'Papatya ihtimali',
+  tulipChance 'Lale ihtimali', lavenderChance 'Lavanta ihtimali', bluebellChance 'Çan çiçeği ihtimali', roseChance
+  'Gül ihtimali', sunflowerChance 'Ayçiçeği ihtimali', skylilyChance 'Gök zambağı ihtimali'. The tree node visual that
+  matched `/^(\w+)Count$/` (draws the flower) must match `/^(\w+)Chance$/` (skip timeChance: not a flower).
+
+## Clean tree screen + fixes (2026-11-22 k)
+- HUD level bar: boss bud at the bar end removed (players mistook it for a plant).
+- Results `.panel`: `overflow-x: hidden`, scrollbar hidden (entry animations flashed a scrollbar).
+- Tree: the land (`landBounds`) covers EVERY node in CONFIG (hidden ones too) + GROUND_MARGIN 700, drawn once;
+  `clampView()` keeps the viewport inside the land (min zoom = what still covers the viewport), so no empty area shows.
+- Tree chrome floats on the land (title/coins/levels top, − + Ortala bottom-left, start button bottom); no bars.
+- Node info = small window next to the selected node (`placeDetail()`, follows pan/zoom, flips left near the edge).
+- Dirty-rect repaint clips on whole device pixels (no seam); the pulsing `.can-buy` outline is removed (gold cost
+  badge marks buyable nodes).
+
+## Combo groups + chance clusters (2026-11-22 l) — supersedes the per-frame combo and clusterSize
+- **Combo:** each growing plant keeps `p.group` = the most growing plants that were under the rain together with it
+  while it kept being watered; leaving the rain for more than COMBO_GRACE (0.3 s) resets it. A bloom pays
+  `combo = min(comboMax, 1 + comboStep·(group − 1))`, so a slow flower watered with a fast one keeps the combo after
+  the fast one blooms. HUD: `run.comboN` = largest group among plants under the rain now.
+- **Clusters:** `base.clusterChance` 0 (%); node `cluster` "+%5" ×3. Every placed plant rolls it; a hit adds 2-3 plants
+  right next to it. At 15 % about a third of the plants sit in groups; the rest stay single.
+
+## Greening difficulty + seedlings (2026-11-22 m, PRD §16)
+- `CONFIG.greenHard` 1.7: Run sets `this.greenNeed` / `this.lushSoil` = CONFIG value × greenHard^(level.id − 1);
+  `_waterGround`, the victory sweep and render.js grass use the run values; the bloom patch soil scales the same way.
+  `groundMul` 1.2.
+- Upgrade defs may carry `also: { stat, per }` (second flat stat per level, computeStats). (Currently unused.) Tohum: plantCount +5 per level;
+  separate node `sprout` "Filizlenme" (child of seeds): respawnChance +1.5 per level (max 5); `cluster` moved under it. A bloom (not a rebloom) rolls respawnChance → `spawnSeedling()`, pushed before
+  the bloom event. The info window shows the `also` stat as a second effect line.
+- (n) `groundMul` 0.5 (rain → soil). Bloom patches unchanged.

@@ -8,6 +8,8 @@
   const CLOUD_CLEAR = 56;   // new seedlings avoid spawning this close to the cloud
   const CLOUD_BASE_R = 44;  // visual cloud radius when the tank is full
   const CLOUD_MIN_FRAC = 0.6;
+  const CLUSTER_GAP = 26;
+  const COMBO_GRACE = 0.3;  // s a plant may leave the rain and still keep its watering group (combo)   // distance between plants inside one cluster (fits under a small rain circle)
 
   function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
 
@@ -32,28 +34,33 @@
       this.coins = 0;
       this.blooms = 0;
       this.combo = 1;
-      this.comboTimer = 0;
+      this.comboN = 0;      // growing plants under the rain this frame (HUD)
       this.bestCombo = 1;
       this.over = false;
       this.endReason = null;
       this.events = [];
 
       this._nextId = 1;
-      this._respawn = [];   // seconds left until each pending seedling appears
 
       // Level bar + boss (PRD §12)
       ctx = ctx || {};
       this.level = ctx.level || null;
       this.flowers = ctx.flowers || null;          // null = every flower allowed
       this.barTarget = this.level ? this.level.barTarget : 0;
+      this.bloomNeed = this.level ? C.bossNeed.base * Math.pow(C.bossNeed.mul, this.level.id - 1) : 0;
       this.barPoints = 0;
       this.bar = 0;                                // 0..1
       this.boss = null;                            // see _spawnBoss
       this.bossWin = false;
       this.greenCell = C.greenCell || 32;
+      // Greening gets harder every level (PRD §16): soil water needed per cell and for full lushness × greenHard^(id−1)
+      const gk = this.level ? Math.pow(C.greenHard || 1, this.level.id - 1) : 1;
+      this.greenNeed = (C.greenNeed || 2.5) * gk;
+      this.lushSoil = (C.lushSoil || 8) * gk;
+      this.greenPts = 0;                           // bar points per greened cell, fixed in _initGreen
       this._initGreen();
 
-      for (let i = 0; i < stats.plantCount; i++) this._spawnPlant();
+      this._spawnInitial(stats.plantCount);
       this._updateCloudRadius();
     }
 
@@ -80,34 +87,57 @@
       return best;
     }
 
-    // Plants with a countStat are kept on the field by count (e.g. stats.roseCount roses);
-    // otherwise pick a filler plant by its internal weight (never shown to the player).
+    // Each placed plant rolls its flower chances from the highest bar down (chance = baseChance + stat, in %);
+    // the first hit wins, otherwise a cactus. Only unlocked flowers (this.flowers, null = all) take part.
     _pickType() {
       const s = this.stats;
       const ok = this.flowers;
+      const list = [];
       for (const type in C.plants) {
         const cfg = C.plants[type];
-        if (!cfg.countStat || (ok && !ok[type])) continue;
-        let n = 0;
-        for (const p of this.plants) if (p.type === type && p.state === 'growing') n++;
-        if (n < (s[cfg.countStat] || 0)) return type;
+        if (!cfg.chanceStat || (ok && !ok[type])) continue;
+        list.push({ type, cfg });
       }
-      let total = 0;
-      for (const type in C.plants) if (!ok || ok[type]) total += C.plants[type].weight || 0;
-      let r = Math.random() * total;
-      for (const type in C.plants) {
-        if (ok && !ok[type]) continue;
-        r -= C.plants[type].weight || 0;
-        if (r < 0) return type;
+      list.sort((a, b) => (b.cfg.bar || 0) - (a.cfg.bar || 0));
+      for (const { type, cfg } of list) {
+        if (Math.random() * 100 < (cfg.baseChance || 0) + (s[cfg.chanceStat] || 0)) return type;
       }
       return 'cactus';
     }
 
-    _spawnPlant() {
-      const spot = this._findSpot();
-      if (!spot) return;
+    // Initial field: mostly single plants. Each placed plant has stats.clusterChance % to grow a small group
+    // (2-3 more plants right next to it); clusters make the combo reachable but stay a minority.
+    _spawnInitial(n) {
+      const chance = this.stats.clusterChance || 0;
+      let left = n;
+      while (left > 0) {
+        const center = this._spawnPlant();
+        left--;
+        if (!center || !(Math.random() * 100 < chance)) continue;
+        const extra = 2 + (Math.random() < 0.5 ? 1 : 0);
+        for (let i = 0; i < extra && left > 0; i++, left--) this._spawnPlant(this._clusterSpot(center));
+      }
+    }
+
+    // Free spot CLUSTER_GAP-ish away from a cluster center; null falls back to a random spot.
+    _clusterSpot(c) {
+      const minX = Math.min(MARGIN, this.w / 2), maxX = Math.max(this.w - MARGIN, this.w / 2);
+      const minY = Math.min(MARGIN + 70, this.h / 2), maxY = Math.max(this.h - MARGIN, this.h / 2);
+      for (let attempt = 0; attempt < 24; attempt++) {
+        const a = Math.random() * Math.PI * 2, d = CLUSTER_GAP * (1 + Math.random() * 0.4);
+        const x = clamp(c.x + Math.cos(a) * d, minX, maxX), y = clamp(c.y + Math.sin(a) * d, minY, maxY);
+        let ok = true;
+        for (const p of this.plants) if (Math.hypot(p.x - x, p.y - y) < CLUSTER_GAP * 0.9) { ok = false; break; }
+        if (ok) return { x, y };
+      }
+      return null;
+    }
+
+    _spawnPlant(at) {
+      const spot = at || this._findSpot();
+      if (!spot) return null;
       const type = this._pickType();
-      this.plants.push({
+      const plant = {
         id: this._nextId++,
         x: spot.x, y: spot.y,
         type: type,
@@ -117,7 +147,16 @@
         state: 'growing',
         age: 0,
         bloomAge: 0,
-      });
+      };
+      this.plants.push(plant);
+      return plant;
+    }
+
+    // Adds one new growing plant mid-run (for chance cards); returns it or null
+    spawnSeedling() {
+      const p = this._spawnPlant();
+      if (p) this.events.push({ type: 'seedling', x: p.x, y: p.y });
+      return p;
     }
 
     _updateCloudRadius() {
@@ -129,10 +168,7 @@
       const s = this.stats;
       const cfg = C.plants[p.type];
 
-      // Combo multiplier: ×1 = no chain, +comboStep per bloom inside the window
-      if (this.comboTimer > 0) this.combo = Math.min(s.comboMax, this.combo + s.comboStep);
-      else this.combo = 1;
-      this.comboTimer = s.comboWindow;
+      // Combo is set per frame in update() from the plants under the rain
       if (this.combo > this.bestCombo) this.bestCombo = this.combo;
 
       // Coins: flat part first, then every multiplier (combo, Fırtına, per-flower ×, lavender's combo ×2)
@@ -141,9 +177,14 @@
       const gain = Math.max(1, Math.round(flat * this.combo * s.coinMul * extraMul));
       this.coins += gain;
       this.blooms++;
-      this._addBar(C.bloomPoints || 2);
+      if (this.level && this.bloomNeed > 0) this._addBar((1 - C.greenShare) * this.barTarget * (cfg.bar || 1) / this.bloomNeed);
+      // Chance for extra run time
+      if (this.timeLimit > 0 && Math.random() * 100 < (s.timeChance || 0)) {
+        this.timeLimit += C.timeChanceSec;
+        this.events.push({ type: 'time', x: p.x, y: p.y, sec: C.timeChanceSec });
+      }
       // A bloom greens a small patch around the plant
-      if (C.bloomGreen && !this.over) this._waterGround(p.x, p.y, C.bloomGreen.radius, C.bloomGreen.soil);
+      if (C.bloomGreen && !this.over) this._waterGround(p.x, p.y, C.bloomGreen.radius, C.bloomGreen.soil * this.greenNeed / (C.greenNeed || 2.5));
       this.water = Math.min(this.tank, this.water + s.dew + (cfg.refund || 0));
 
       p.bloomsLeft = (p.bloomsLeft || 1) - 1;
@@ -154,7 +195,8 @@
         p.state = 'bloomed';
         p.bloomAge = 0;
         p.water = p.need;
-        this._respawn.push(C.respawnDelay);
+        // Tohum node: a bloom may leave a new seedling behind (pushed before the bloom event, which must stay last)
+        if (s.respawnChance > 0 && !this.over && Math.random() * 100 < s.respawnChance) this.spawnSeedling();
       }
       this.events.push({ type: 'bloom', x: p.x, y: p.y, coins: gain, combo: this.combo, plantType: p.type,
         mul: extraMul > 1 ? extraMul : 0, refund: cfg.refund || 0, rebloom: rebloom });
@@ -187,18 +229,37 @@
       this.drainRate = drain;
       this.water -= drain * dt;
 
-      // Watering and blooming
+      // Watering and blooming.
+      // Combo = size of the watering group: every plant remembers the most plants that were under the rain together
+      // with it (p.group) while it kept being watered. A slower flower watered alongside a cactus keeps the group after
+      // the cactus blooms. Leaving the rain for more than COMBO_GRACE s drops the group.
+      const comboOf = function (g) { return g <= 1 ? 1 : Math.min(s.comboMax, 1 + s.comboStep * (g - 1)); };
+      let hudN = 0;
       if (this.raining) {
         const rr = this.rainRadius, amount = s.rainRate * dt;
+        let n = 0;
+        for (const p of this.plants) {
+          if (p.state === 'growing' && Math.hypot(p.x - c.x, p.y - c.y) <= rr) n++;
+        }
         for (const p of this.plants) {
           if (p.state !== 'growing') continue;
           if (Math.hypot(p.x - c.x, p.y - c.y) <= rr) {
+            p.group = Math.max(p.group || 0, n);
+            p.dryT = 0;
+            if (p.group > hudN) hudN = p.group;
             p.water += amount;
             p.wet = true;
-            if (p.water >= p.need) this._bloom(p);
+            if (p.water >= p.need) { this.combo = comboOf(p.group); this._bloom(p); }
           }
         }
       }
+      for (const p of this.plants) {
+        if (p.state !== 'growing' || p.wet || !p.group) continue;
+        p.dryT = (p.dryT || 0) + dt;
+        if (p.dryT > COMBO_GRACE) p.group = 0;
+      }
+      this.comboN = hudN;
+      this.combo = comboOf(hudN);
       // Soil greening (level bar) and boss
       if (this.raining) this._waterGround(c.x, c.y, this.rainRadius, s.rainRate * (C.groundMul || 1) * dt);
       if (this.boss) this._updateBoss(dt);
@@ -211,7 +272,7 @@
         p.wet = false;
       }
 
-      // Plant lifecycle: aging, linger removal, respawn
+      // Plant lifecycle: aging, linger removal
       for (let i = this.plants.length - 1; i >= 0; i--) {
         const p = this.plants[i];
         p.age += dt;
@@ -220,26 +281,14 @@
           if (p.bloomAge >= C.bloomLinger) this.plants.splice(i, 1);
         }
       }
-      for (let i = this._respawn.length - 1; i >= 0; i--) {
-        this._respawn[i] -= dt;
-        if (this._respawn[i] <= 0) {
-          this._respawn.splice(i, 1);
-          this._spawnPlant();
-        }
-      }
-
-      // Combo window
-      if (this.comboTimer > 0) {
-        this.comboTimer = Math.max(0, this.comboTimer - dt);
-        if (this.comboTimer === 0) this.combo = 1;
-      }
-
       // End conditions (water first: it is the more informative reason)
       if (this.water <= 0) {
         this.water = 0;
         this._finish('water');
       } else if (this.timeLimit > 0 && this.t >= this.timeLimit) {
         this._finish('time');
+      } else if (!this.boss && !this.plants.some(function (p) { return p.state === 'growing'; })) {
+        this._finish('flowers');
       }
       this._updateCloudRadius();
     }
@@ -252,10 +301,11 @@
       this.soil = new Float32Array(this.gw * this.gh);      // water soaked per cell
       this.greened = new Uint8Array(this.gw * this.gh);     // 1 once the cell counted for the bar
       this.greenCount = 0;
+      this.greenPts = this.level ? C.greenShare * this.barTarget / (this.gw * this.gh) : 0;
     }
 
     _waterGround(x, y, r, amount) {
-      const g = this.greenCell, need = C.greenNeed || 2.5;
+      const g = this.greenCell, need = this.greenNeed;
       const i0 = Math.max(0, Math.floor((x - r) / g)), i1 = Math.min(this.gw - 1, Math.floor((x + r) / g));
       const j0 = Math.max(0, Math.floor((y - r) / g)), j1 = Math.min(this.gh - 1, Math.floor((y + r) / g));
       for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
@@ -266,7 +316,7 @@
         if (!this.greened[k] && this.soil[k] >= need) {
           this.greened[k] = 1;
           this.greenCount++;
-          this._addBar(1);
+          this._addBar(this.greenPts);
         }
       }
     }
@@ -376,7 +426,7 @@
       if (!sw || sw.done) return true;
       const prev = sw.r;
       sw.r = Math.min(sw.max, sw.r + ((C.victory && C.victory.speed) || 460) * dt);
-      const g = this.greenCell, lush = C.lushSoil || 8;
+      const g = this.greenCell, lush = this.lushSoil;
       for (let j = 0; j < this.gh; j++) for (let i = 0; i < this.gw; i++) {
         const d = Math.hypot((i + 0.5) * g - sw.x, (j + 0.5) * g - sw.y);
         if (d <= sw.r) { const k = j * this.gw + i; if (this.soil[k] < lush) this.soil[k] = lush; this.greened[k] = 1; }
@@ -402,10 +452,19 @@
     }
 
     _finish(reason) {
+      if (this.over) return;
       this.over = true;
       this.endReason = reason;
       this.raining = false;
       this.drainRate = 0;
+      // Leftover water greens extra areas for gold (not when the tank ran dry)
+      this.leftoverAreas = 0;
+      this.leftoverGold = 0;
+      if (reason !== 'water' && this.water > 0) {
+        this.leftoverAreas = Math.floor(this.water / C.leftover.waterPerArea);
+        this.leftoverGold = this.leftoverAreas * (C.leftover.gold + (this.stats.leftoverGold || 0));
+        this.coins += this.leftoverGold;
+      }
       this.events.push({ type: 'end', reason: reason });
     }
 
@@ -449,6 +508,8 @@
         bossReward: this.bossReward || 0,
         sweepCoins: this.sweep ? this.sweep.coins : 0,
         sweepBlooms: this.sweep ? this.sweep.blooms : 0,
+        leftoverAreas: this.leftoverAreas || 0,
+        leftoverGold: this.leftoverGold || 0,
       };
     }
   }
