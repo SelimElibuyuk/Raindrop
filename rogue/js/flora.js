@@ -1,6 +1,6 @@
 // Flat vector flowers drawn in code (no sprites).
 //   RD.Flora.draw(ctx, type, x, y, opts)  (x, y) = ground point
-//     opts = { size, growth 0..1, bloom 0..1, fade 0..1, wilt 0..1, sway (rad), seed }
+//     opts = { size, growth 0..1, bloom 0..1, fade 0..1, wilt 0..1, sway (rad), seed, golden (bool), time (s) }
 //   RD.Flora.icon(type, px) -> data URL of the fully bloomed plant (cached)
 // Style: flat fills, no outlines, one lighter/darker tone per part, side view standing on the ground.
 // Each design lives in its own unit space (ground at 0, up is -y) and is scaled so the fully grown
@@ -693,6 +693,50 @@
       pal: { leaf: '#5f978c', leafD: '#457970', stem: '#56897f', bud: '#7fae9c', budD: '#62927f', budL: '#a9cdbe', petal: '#5262b8', petalD: '#3b4895', edge: '#d7defa', stamen: '#f3d27c' } },
   };
 
+  // ---------- golden variant ----------
+  // Every palette colour is mapped through a luminance -> gold ramp (bronze -> gold -> pale gold). The
+  // luminance is normalised per type so each plant keeps its own light/dark contrast. Cached per type.
+  const GOLD_RAMP = ['#6b4a12', '#d9a521', '#fff1b0'];
+  function goldAt(t) {
+    return t < 0.5 ? mixHex(GOLD_RAMP[0], GOLD_RAMP[1], t * 2) : mixHex(GOLD_RAMP[1], GOLD_RAMP[2], (t - 0.5) * 2);
+  }
+  function lumOf(hex) { const c = rgbOf(hex); return 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2]; }
+  function goldPal(T) {
+    if (T.gpal) return T.gpal;
+    let lo = 1e9, hi = -1e9;
+    for (const k in T.pal) { const l = lumOf(T.pal[k]); if (l < lo) lo = l; if (l > hi) hi = l; }
+    const span = Math.max(1, hi - lo), g = {};
+    for (const k in T.pal) g[k] = goldAt(0.08 + 0.88 * (lumOf(T.pal[k]) - lo) / span);
+    return (T.gpal = g);
+  }
+  // 4-point star (concave sides) at the origin, radius r.
+  function starPath(ctx, x, y, r) {
+    const q = r * 0.18;
+    ctx.moveTo(x, y - r);
+    ctx.quadraticCurveTo(x + q, y - q, x + r, y);
+    ctx.quadraticCurveTo(x + q, y + q, x, y + r);
+    ctx.quadraticCurveTo(x - q, y + q, x - r, y);
+    ctx.quadraticCurveTo(x - q, y - q, x, y - r);
+  }
+  // Soft twinkle: three small stars around the plant (ground-space, not rotated), phase-shifted per plant.
+  function sparkle(ctx, size, seed, time, g) {
+    const amp = eOut(ph(g, 0.1, 0.5));
+    if (amp <= 0.01) return;
+    ctx.fillStyle = '#fff1b0';
+    for (let i = 0; i < 3; i++) {
+      const cyc = time * 0.9 + hash(seed, 40 + i) * 3 + i * 0.37;
+      const f = cyc - Math.floor(cyc);                       // 0..1 per twinkle
+      const a = f < 0.5 ? Math.sin(f * Math.PI * 2) : 0;     // visible half of the cycle, brief and soft
+      if (a <= 0.02) continue;
+      const slot = Math.floor(cyc) + i * 7;                  // new spot each twinkle
+      const ang = hash(seed, 50 + (slot & 15) * 3 + i) * TAU;
+      const rad = (0.28 + 0.22 * hash(seed, 80 + (slot & 15) * 3 + i)) * size;
+      const sx = Math.cos(ang) * rad * 0.9, sy = -size * 0.55 + Math.sin(ang) * rad * 0.9;
+      ctx.globalAlpha = a * amp * 0.9;
+      ctx.beginPath(); starPath(ctx, sx, sy, size * (0.05 + 0.035 * a)); ctx.fill();
+    }
+  }
+
   // ---------- public ----------
   // Per-plant state (reused): growth, bloom, wilt, seed values.
   const S = { g: 0, b: 0, w: 0, seed: 0, varied: false, r1: 0.5, r2: 0.5, r3: 0.5, r4: 0.5,
@@ -728,9 +772,15 @@
     ctx.scale(flip ? -k : k, k);
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    T.draw(ctx, S, T.pal);
+    T.draw(ctx, S, o.golden ? goldPal(T) : T.pal);
     ctx.restore();
     WS = 0;
+    if (o.golden) {
+      ctx.save();
+      ctx.translate(x, y);
+      sparkle(ctx, size, seed, o.time != null ? o.time : Date.now() / 1000, S.g);
+      ctx.restore();
+    }
   }
 
   const iconCache = {};

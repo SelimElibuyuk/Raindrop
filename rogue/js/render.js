@@ -155,7 +155,7 @@
   }
 
   // Paints the dry field onto g (already scaled to CSS px), w x h CSS px.
-  function paintGround(g, w, h, seed) {
+  function paintGround(g, w, h, seed, noVignette) {
     const rand = rng(seed == null ? 1337 : seed);
     const area = w * h;
     g.fillStyle = P.sand;
@@ -179,7 +179,10 @@
     // Sand grains: sparse tiny dots
     g.fillStyle = P.grain;
     const grains = Math.round(area / 1600);
-    for (let i = 0; i < grains; i++) g.fillRect(rand() * w, rand() * h, 1.3, 1.3);
+    // One path, one fill: the stage zoom repaints the ground every frame, so no per-grain draw calls
+    g.beginPath();
+    for (let i = 0; i < grains; i++) g.rect(rand() * w, rand() * h, 1.3, 1.3);
+    g.fill();
 
     // Cracks: a few angular tapered shapes with a light lip below (two-tone), some with one branch
     const nC = Math.round(area / 42000) + 4;
@@ -252,7 +255,10 @@
       g.fill();
     }
 
-    // Very soft edge vignette (dusk), painted once
+    // Very soft edge vignette (dusk), painted once. noVignette: the stage zoom paints it in screen space.
+    if (!noVignette) paintVignette(g, w, h);
+  }
+  function paintVignette(g, w, h) {
     const vg = g.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.4, w / 2, h / 2, Math.max(w, h) * 0.78);
     vg.addColorStop(0, 'rgba(40,30,50,0)');
     vg.addColorStop(1, 'rgba(40,30,50,0.2)');
@@ -616,7 +622,7 @@
       gr.dirty[t] = 0;
       paintTile(L, t);
     }
-    if (gr.any) g.drawImage(gr.cv, 0, 0, L.gw * L.cell, L.gh * L.cell);
+    if (gr.any && g) g.drawImage(gr.cv, 0, 0, L.gw * L.cell, L.gh * L.cell);   // g null: rebuild the cache only
   }
 
   // Rebuilds the grid for a new size; keeps the overlapping dampness and grass so a resize mid-run
@@ -741,8 +747,17 @@
       let r = recs.get(p.id);
       if (!r) {
         r = { p: p, seen: true, bloomT: -1, reb: -1, regrow: false, peak: 0, wilt: 0, wet: false,
-          pw: p.water, lose: 0, ringA: 0, pulse: 1, hold: false };
+          pw: p.water, lose: 0, ringA: 0, pulse: 1, hold: false, intro: -1, shown: false, dn: 0 };
+        // Planted by a stage-up while the zoom plays: pops in on the zoom's clock (staggered from the centre)
+        if (ZX && ZX.p < 1) { r.intro = 0; r.dn = clamp(Math.hypot(p.x - W / 2, p.y - H / 2) / ZX.maxD, 0, 1); }
         recs.set(p.id, r);
+      }
+      if (r.intro >= 0) {
+        const pp = ZX ? ZX.p : 1;
+        r.intro = ZX && ZX.still ? (pp >= 0.55 ? smooth01((pp - 0.55) / 0.35) : 0)
+          : clamp((pp - (ZOOM_POP_AT + ZOOM_POP_SPREAD * r.dn)) / ZOOM_POP_LEN, 0, 1);
+        // Fully popped: the zoom's reveal replaces the age fade (p.age only starts once the zoom ends)
+        if (r.intro >= 1) { r.intro = -1; r.shown = true; }
       }
       r.p = p;
       r.seen = true;
@@ -813,8 +828,15 @@
         if (t < REB_OPEN + REB_HOLD) { bloom = clamp(t / REB_OPEN, 0, 1); growth = 1; }
         else { const k = clamp((t - REB_OPEN - REB_HOLD) / REB_CLOSE, 0, 1); bloom = 1 - k; growth = 1 + (growth - 1) * k; }
       }
-      const s0 = clamp(p.age / SPAWN_POP, 0, 1);
+      const s0 = r.shown ? 1 : clamp(p.age / SPAWN_POP, 0, 1);
       fade = 1 - (1 - s0) * (1 - s0);
+    }
+    // Stage zoom pop-in: grows from small with a light overshoot while fading in
+    let pop = 1;
+    if (r.intro >= 0) {
+      if (r.intro <= 0) return;
+      fade = smooth01(r.intro * 2.2);
+      pop = ZX && ZX.still ? 1 : 0.3 + 0.7 * eBack(r.intro);
     }
     const w = r.wilt;
     // Gentle sway, slower and smaller when wilted; a light shiver while being rained on
@@ -827,10 +849,12 @@
       // Soft breathing, own phase per plant; settles under the rain
       size *= 1 + PULSE_AMP * r.pulse * Math.sin(clock * 6.2832 / PULSE_PERIOD + p.id * 2.39);
     }
-    plantRing(r, base * GROW_BOOST);
+    size *= pop;
+    if (r.intro < 0) plantRing(r, base * GROW_BOOST);
     const o = floraOpts;
     o.size = size;
     o.growth = growth; o.bloom = bloom; o.fade = fade; o.wilt = w; o.sway = sway; o.seed = p.id;
+    o.golden = !!p.golden; o.time = clock;
     if (RD.Flora) RD.Flora.draw(ctx, p.type, p.x, p.y, o);
   }
 
@@ -865,6 +889,119 @@
       ctx.lineWidth = 2.8;
       ctx.strokeStyle = r.lose > 0.5 ? BP.ringLose : BP.ringWater;
       ctx.beginPath(); ctx.ellipse(p.x, y, rx, rx * 0.4, 0, Math.PI / 2 - frac * Math.PI, Math.PI / 2 + frac * Math.PI); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---------- linked-flower vines (run.plants[].link / linkWet) ----------
+  // One thin vine per linked pair, drawn once (lower id first) while both are growing, under the plants.
+  // Small per-pair render state (fade, travelling water pulse) keyed by "a-b" ids; dropped once faded out.
+  const linkRecs = new Map();
+  const LINK_FADE = 0.3, LINK_PULSE_SEC = 0.9;
+  function drawLinks(run, dt) {
+    const plants = run.plants, byId = new Map();
+    if (plants) for (let i = 0; i < plants.length; i++) byId.set(plants[i].id, plants[i]);
+    const seen = new Set();
+    if (plants) {
+      for (let i = 0; i < plants.length; i++) {
+        const p = plants[i];
+        if (p.link == null || p.id >= p.link) continue;
+        const q = byId.get(p.link);
+        if (!q) continue;
+        const key = p.id + '-' + q.id;
+        seen.add(key);
+        let r = linkRecs.get(key);
+        if (!r) { r = { a: 0, glow: 0, t: 0, dir: 1, seed: (p.id * 7.31 + q.id * 3.17) % 6.283, x0: 0, y0: 0, x1: 0, y1: 0 }; linkRecs.set(key, r); }
+        r.x0 = p.x; r.y0 = p.y; r.x1 = q.x; r.y1 = q.y;
+        const alive = p.state === 'growing' && q.state === 'growing';
+        r.a = clamp(r.a + (alive ? dt : -dt) / LINK_FADE, 0, 1);
+        const wet = alive && (p.linkWet || q.linkWet);
+        if (wet) {
+          // Pulse travels from the wet plant toward its partner
+          const dir = p.linkWet ? 1 : -1;
+          if (r.glow < 0.05 || dir !== r.dir) { r.dir = dir; if (r.glow < 0.05) r.t = 0; }
+          r.t = (r.t + dt / LINK_PULSE_SEC) % 1;
+        }
+        r.glow = clamp(r.glow + (wet ? dt : -dt) / 0.15, 0, 1);
+      }
+    }
+    // Pairs that vanished from the plant list fade out on their last known positions
+    for (const [key, r] of linkRecs) {
+      if (!seen.has(key)) {
+        r.a -= dt / LINK_FADE; r.glow = 0;
+        if (r.a <= 0) { linkRecs.delete(key); continue; }
+      }
+      if (r.a <= 0.003) continue;
+      drawVine(r);
+    }
+  }
+  function drawVine(r) {
+    const dx = r.x1 - r.x0, dy = r.y1 - r.y0, len = Math.hypot(dx, dy);
+    if (len < 4) return;
+    const nx = -dy / len, ny = dx / len;           // unit normal
+    const bend = len * 0.07 * Math.sin(r.seed);    // slight curve
+    const n = Math.max(8, Math.round(len / 12));
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const t = i / n, k = Math.sin(Math.PI * t);
+      const off = bend * 4 * t * (1 - t) + Math.sin(t * 9 + clock * 1.3 + r.seed) * 1.8 * k;
+      pts.push(r.x0 + dx * t + nx * off, r.y0 + dy * t + ny * off);
+    }
+    ctx.save();
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.globalAlpha = 0.85 * r.a;
+    ctx.strokeStyle = '#4a6634';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(pts[0], pts[1]);
+    for (let i = 1; i <= n; i++) ctx.lineTo(pts[i * 2], pts[i * 2 + 1]);
+    ctx.stroke();
+    // A few tiny leaves, alternating sides
+    ctx.fillStyle = '#5c7d3c';
+    const nl = Math.max(3, Math.min(6, Math.round(len / 55)));
+    for (let j = 1; j <= nl; j++) {
+      const i = Math.round(n * j / (nl + 1)), lx = pts[i * 2], ly = pts[i * 2 + 1], side = j & 1 ? 1 : -1;
+      ctx.beginPath();
+      ctx.ellipse(lx + nx * side * 3, ly + ny * side * 3, 3.2, 1.5, Math.atan2(dy, dx) + side * 0.7, 0, 6.283);
+      ctx.fill();
+    }
+    // Soft water-blue pulse travelling along the vine
+    if (r.glow > 0.01) {
+      const u = r.dir > 0 ? r.t : 1 - r.t, f = u * n, i0 = Math.min(n - 1, Math.floor(f)), fr = f - i0;
+      const gx = pts[i0 * 2] + (pts[i0 * 2 + 2] - pts[i0 * 2]) * fr, gy = pts[i0 * 2 + 1] + (pts[i0 * 2 + 3] - pts[i0 * 2 + 1]) * fr;
+      const gr = ctx.createRadialGradient(gx, gy, 0, gx, gy, 16);
+      gr.addColorStop(0, 'rgba(150,210,255,0.75)');
+      gr.addColorStop(1, 'rgba(150,210,255,0)');
+      ctx.globalAlpha = r.a * r.glow;
+      ctx.fillStyle = gr;
+      ctx.beginPath(); ctx.arc(gx, gy, 16, 0, 6.283); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // ---------- water splash flyers (run.splashes) ----------
+  // A water blob flying on a parabolic arc (peak ~40 px above the straight line), stretched along its motion.
+  function drawSplashFlyers(run) {
+    const list = run.splashes;
+    if (!list || !list.length) return;
+    for (let i = 0; i < list.length; i++) {
+      const s = list[i];
+      const u = clamp((s.t || 0) / (s.fly || 0.4), 0, 1);
+      const arc = (a, b, h) => a + (b - a) * u - (h ? 4 * h * u * (1 - u) : 0);
+      const px = arc(s.sx, s.x), py = arc(s.sy, s.y, 40);
+      // Tangent for the stretch direction
+      const vx = s.x - s.sx, vy = (s.y - s.sy) - 4 * 40 * (1 - 2 * u);
+      const ang = Math.atan2(vy, vx), st = 1.5;
+      const r = 5.5 * (0.85 + 0.15 * Math.sin(u * Math.PI));
+      // Faint trail
+      ctx.globalAlpha = 0.3;
+      ctx.fillStyle = P.rainA;
+      const tx = px - Math.cos(ang) * r * 2.2, ty = py - Math.sin(ang) * r * 2.2;
+      ctx.beginPath(); ctx.ellipse(tx, ty, r * 0.9, r * 0.5, ang, 0, 6.283); ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = P.rainB;
+      ctx.beginPath(); ctx.ellipse(px, py, r * st, r * 0.8, ang, 0, 6.283); ctx.fill();
+      ctx.fillStyle = P.rainA;
+      ctx.beginPath(); ctx.ellipse(px - Math.cos(ang) * r * 0.3, py - Math.sin(ang) * r * 0.3 - r * 0.25, r * 0.5, r * 0.25, ang, 0, 6.283); ctx.fill();
     }
     ctx.globalAlpha = 1;
   }
@@ -1006,9 +1143,154 @@
       particles.push({ x: x, y: y, vx: (Math.random() - 0.5) * 22, vy: -20 - Math.random() * 14, age: 0, life: 0.3, r: 1.1, color: P.splash, g: 160 });
     }
   }
+  // Big drops (crit system): one large teardrop per run.drops entry, falling from the cloud to its target
+  // with gravity-like ease-in. Drawn flat in the same two blues as the rain streaks.
+  const BIG_R = 6.5;
+  function drawBigDrops(run) {
+    const list = run.drops;
+    if (!list || !list.length) return;
+    const cr = run.cloud.r;
+    for (let i = 0; i < list.length; i++) {
+      const d = list[i];
+      const u = clamp(d.t / (d.fall || 0.3), 0, 1), e = u * u;
+      // Falls straight down from the cloud's underside (drawn above the pointer), like the normal rain
+      const top = Math.min(d.y, cloudDrawY(d.sy, cr) + cr * (CLOUD_BOTTOM - 0.12));
+      const px = d.x, py = top + (d.y - top) * e;
+      // Faint landing mark on the ground that tightens as the drop nears
+      ctx.globalAlpha = 0.22 * u;
+      ctx.strokeStyle = P.rainB;
+      ctx.lineWidth = 1.5;
+      const mr = BIG_R * (2.4 - 1.2 * u);
+      ctx.beginPath(); ctx.ellipse(d.x, d.y, mr, mr * 0.4, 0, 0, 6.283); ctx.stroke();
+      // Teardrop: point up, round belly down, a little longer the faster it falls
+      const r = BIG_R * (0.55 + 0.45 * Math.min(1, u * 3)), tail = r * (2.3 + 1.2 * e);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = P.rainB;
+      ctx.beginPath();
+      ctx.moveTo(px, py - tail);
+      ctx.quadraticCurveTo(px + r * 1.05, py - r * 0.9, px + r, py);
+      ctx.arc(px, py, r, 0, Math.PI);
+      ctx.quadraticCurveTo(px - r * 1.05, py - r * 0.9, px, py - tail);
+      ctx.fill();
+      ctx.fillStyle = P.rainA;
+      ctx.beginPath(); ctx.ellipse(px - r * 0.35, py - r * 0.1, r * 0.28, r * 0.5, 0.2, 0, 6.283); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // Landing of a big drop: small splash for a normal one, a burst + "Kritik!" for a crit.
+  function dropEvent(e) {
+    const x = e.x, y = e.y;
+    addSplash(splashes, x, y);
+    if (!e.crit) return;   // a non-crit big drop lands like a normal raindrop
+    for (let i = 0; i < 14 && particles.length < MAX_PARTICLES; i++) {
+      const a = -Math.PI * (0.1 + 0.8 * Math.random()), sp = 70 + Math.random() * 90;
+      particles.push({ x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, age: 0, life: 0.35 + Math.random() * 0.2,
+        r: 1.8 + Math.random() * 1.2, color: i & 1 ? P.rainA : P.splash, g: 320 });
+    }
+    addRing(x, y, 4, 40, 0.45, P.splash, 3);
+    addRing(x, y, 2, 24, 0.35, P.rainB, 2);
+    shake(2, 0.12);
+    addPopup(x, y - 22, 'Kritik!', { size: 21, life: 1.1, color: '#e8f5ff', edge: 'rgba(20,44,78,0.9)' });
+  }
+
   function drawRain(dt, run) {
     const top = cloudDrawY(run.cloud.y, run.cloud.r) + run.cloud.r * (CLOUD_BOTTOM - 0.12);
     stepRain(ctx, drops, dt, run.cloud.x, run.cloud.y, run.rainRadius, top, onRainHit);
+  }
+
+  // ---------- mini clouds, sudden shower, moist vapor (all guarded: fields may be missing) ----------
+  let miniDrops = [];                 // one rain drop list per mini cloud (index-keyed)
+  let showerR = null;                 // render state of the shower: { x, y, r, a (cloud/rain fade), warn (shadow 0..1), drops }
+  const vapor = [];                   // rising wisps over moist plants
+  const MAX_VAPOR = 36;
+
+  function resetWeather() { miniDrops = []; showerR = null; vapor.length = 0; }
+
+  // Warn-phase shadow on the ground (drawn before the plants)
+  function drawShowerShadow(run, dt) {
+    const sh = run.shower, cfg = (RD.CONFIG && RD.CONFIG.shower) || {};
+    if (sh && isFinite(sh.x) && isFinite(sh.y) && sh.r > 0) {
+      if (!showerR) showerR = { x: sh.x, y: sh.y, r: sh.r, a: 0, warn: 0, drops: [] };
+      showerR.x = sh.x; showerR.y = sh.y; showerR.r = sh.r;
+      const wd = cfg.warn || 1.2;
+      const target = sh.phase === 'warn' ? clamp((sh.t || 0) / wd, 0, 1) : 1;
+      showerR.warn = Math.max(showerR.warn, target);
+      showerR.live = true;
+      showerR.rain = sh.phase === 'rain';
+    } else if (showerR) {
+      showerR.live = false; showerR.rain = false;
+      showerR.warn = Math.max(0, showerR.warn - dt * 2);   // ~0.5 s fade
+    }
+    if (!showerR) return;
+    const s = showerR, e = 1 - (1 - s.warn) * (1 - s.warn);
+    if (s.warn > 0.01) {
+      const rr = s.r * (0.6 + 0.4 * e);
+      const g = ctx.createRadialGradient(s.x, s.y, rr * 0.2, s.x, s.y, rr);
+      g.addColorStop(0, 'rgba(34,28,24,' + (0.30 * e) + ')');
+      g.addColorStop(0.75, 'rgba(34,28,24,' + (0.2 * e) + ')');
+      g.addColorStop(1, 'rgba(34,28,24,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.ellipse(s.x, s.y, rr, rr * 0.7, 0, 0, 6.283); ctx.fill();
+    }
+  }
+
+  // Rain phase: cloud over the circle with rain across it, fading out once the shower ends
+  function drawShowerCloud(run, dt) {
+    const s = showerR;
+    if (!s) return;
+    s.a = clamp(s.a + (s.rain ? dt * 3 : -dt * 2), 0, 1);
+    if (s.a <= 0.01) { if (!s.live) showerR = null; return; }
+    const cr = ((run.cloud && run.cloud.r) || 50) * 1.1;
+    const cy = cloudDrawY(s.y, cr);
+    const top = cy + cr * (CLOUD_BOTTOM - 0.12);
+    ctx.globalAlpha = s.a;
+    stepRain(ctx, s.drops, s.rain ? dt : 0, s.x, s.y, s.r, top, s.rain ? onRainHit : null);
+    drawCloudArt(ctx, s.x, cy, cr, 0.2, 0.025, clock);
+    ctx.globalAlpha = 1;
+  }
+
+  // Small clouds with their own light rain (drawn before the main cloud so the player's stays on top)
+  function drawMinis(run, dt) {
+    const list = run.minis, cfg = RD.CONFIG && RD.CONFIG.mini;
+    if (!list || !list.length || !cfg || !(cfg.r > 0)) { if (miniDrops.length) miniDrops = []; return; }
+    if (miniDrops.length !== list.length) { miniDrops = []; for (let i = 0; i < list.length; i++) miniDrops.push([]); }
+    const mr = (((run.cloud && run.cloud.r) || 50) * 0.5);
+    for (let i = 0; i < list.length; i++) {
+      const m = list[i];
+      if (!m || !isFinite(m.x) || !isFinite(m.y)) continue;
+      const top = cloudDrawY(m.y, mr) + mr * (CLOUD_BOTTOM - 0.12);
+      ctx.globalAlpha = 0.85;
+      stepRain(ctx, miniDrops[i], dt, m.x, m.y, cfg.r, top, miniHit);
+      ctx.globalAlpha = 1;
+      drawCloudArt(ctx, m.x, cloudDrawY(m.y, mr), mr, 0.1, 0.02, clock + i * 1.7);
+    }
+  }
+  function miniHit(x, y) { if (Math.random() < 0.15) addSplash(splashes, x, y); }
+
+  // Faint, slow vapor wisps rising from moist plants (cap MAX_VAPOR)
+  function drawVapor(run, dt) {
+    const pl = run.plants;
+    if (pl && dt > 0) {
+      for (let i = 0; i < pl.length && vapor.length < MAX_VAPOR; i++) {
+        const p = pl[i];
+        if (p && p.moist === true && Math.random() < dt * 0.5) {
+          vapor.push({ x: p.x + (Math.random() - 0.5) * 18, y: p.y - 2, age: 0, life: 2 + Math.random() * 1.2, ph: Math.random() * 6.283, r: 2.5 + Math.random() * 2 });
+        }
+      }
+    }
+    if (!vapor.length) return;
+    ctx.fillStyle = '#f3f6ee';
+    for (let i = vapor.length - 1; i >= 0; i--) {
+      const q = vapor[i];
+      q.age += dt;
+      if (q.age >= q.life) { vapor.splice(i, 1); continue; }
+      const f = q.age / q.life;
+      ctx.globalAlpha = 0.16 * Math.sin(f * Math.PI);
+      const x = q.x + Math.sin(q.ph + q.age * 1.6) * 4, y = q.y - q.age * 13;
+      ctx.beginPath(); ctx.ellipse(x, y, q.r * (0.8 + f), q.r * (1.2 + f * 0.8), 0, 0, 6.283); ctx.fill();
+    }
+    ctx.globalAlpha = 1;
   }
 
   // ---------- boss flower (PRD §12) ----------
@@ -1286,7 +1568,7 @@
     if (B.kind === 'shade') { sway += B.lean; wilt = q.done ? 0 : B.wilt; }
     if (B.kind === 'shield' && B.blockT > 0) x += Math.sin(clock * 70) * 3 * (B.blockT / 0.35);
     const o = floraOpts;
-    o.size = size; o.growth = growth; o.bloom = bloom; o.fade = 1; o.wilt = wilt; o.sway = sway; o.seed = bp.seed;
+    o.size = size; o.growth = growth; o.bloom = bloom; o.fade = 1; o.wilt = wilt; o.sway = sway; o.seed = bp.seed; o.golden = false;
     if (RD.Flora) RD.Flora.draw(ctx, B.boss.type, x, q.y, o);
   }
 
@@ -1463,6 +1745,15 @@
     for (const e of run.events) {
       if (e.type !== 'bloom') {
         if (e.type.indexOf('boss') === 0) bossEvent(e, run);
+        else if (e.type === 'drop') dropEvent(e);
+        else if (e.type === 'splash') addSplash(splashes, e.x, e.y);
+        else if (e.type === 'shower' && isFinite(e.x) && isFinite(e.y)) {
+          const R = e.r > 0 ? e.r : 60;
+          for (let i = 0; i < 6; i++) {
+            const a = Math.random() * 6.283, d = Math.sqrt(Math.random()) * R;
+            addSplash(splashes, e.x + Math.cos(a) * d, e.y + Math.sin(a) * d * 0.7);
+          }
+        }
         else if (e.type === 'time' && popups.length < MAX_POPUPS) {
           popups.push({ x: e.x, y: e.y - 70, text: '+' + (e.sec || 1) + ' sn', age: 0, life: 1.2, big: true, color: '#ffe9a8', edge: 'rgba(60,40,10,0.85)' });
         }
@@ -1481,7 +1772,9 @@
         addPopup(e.x, e.y - ph - 12, '+' + e.coins, { size: 19, life: 1.3, color: '#ffd76a', edge: 'rgba(60,40,10,0.85)' });
       } else if (popups.length < MAX_POPUPS) {
         const mul = e.mul > 1 ? ' ×' + (Math.round(e.mul * 100) / 100) : '';
-        popups.push({ x: e.x, y: e.y - ph - 10, text: '+' + e.coins + mul + (e.combo > 1 ? ' ' + fmtCombo(e.combo) : ''), age: 0, life: 1.1, big: e.combo > 1 || !!mul });
+        const q = { x: e.x, y: e.y - ph - 10, text: '+' + e.coins + mul + (e.combo > 1 ? ' ' + fmtCombo(e.combo) : ''), age: 0, life: 1.1, big: e.combo > 1 || !!mul };
+        if (e.golden) { q.color = '#ffc933'; q.edge = 'rgba(80,46,4,0.92)'; q.size = 19; q.life = 1.3; }
+        popups.push(q);
       }
       if (e.refund > 0 && !e.victory && popups.length < MAX_POPUPS) {
         popups.push({ x: e.x + 14, y: e.y - 6, text: '+' + e.refund + ' su', age: 0, life: 1.0, big: false, color: '#a9d6f5', edge: 'rgba(20,40,70,0.8)' });
@@ -1565,6 +1858,220 @@
     ctx.globalAlpha = 1;
   }
 
+  // ---------- growing-garden stage zoom (PRD §19, CONTRACTS "Growing-garden stages") ----------
+  // run.js swaps the field inside update() and then freezes for run.zoom.dur s. At the first draw of a new
+  // run.zoom the OLD field still lives in render state (recs -> old plant objects, the soak grid + grass
+  // cache, linkRecs, fx), so it is re-drawn into three temporary device-px layers:
+  //   L0 ground (sand, no vignette)  L1 soil (damp tint + grass)  L2 garden (vines, plants, splashes, fx)
+  // No cloud, rain or target in them: those stay live in screen space and keep their size.
+  // Then the camera pulls back: the layers shrink by `k` toward the field centre (scale s: 1 -> k) while
+  // the NEW world is drawn under the matching camera scale z = s / k (2 -> 1), so its shrunken green core
+  // sits where the old field shrinks to and fresh sand slides in from the screen edges. The old sand
+  // dissolves into the live sand early, the old garden cross-fades into the real core at the end, the new
+  // plants pop in from the centre outward and the cloud swells once ("the cloud grew").
+  const ZOOM_POP_AT = 0.5, ZOOM_POP_SPREAD = 0.3, ZOOM_POP_LEN = 0.16;   // plant pop-in windows (zoom progress)
+  const ZOOM_TAIL = 0.5;          // s the stage title keeps fading after the freeze ends
+  let ZX = null;                  // transition state, see startStageZoom
+  let zoomRef = null;             // run.zoom object the transition belongs to
+
+  function smoother(t) { t = clamp(t, 0, 1); return t * t * t * (t * (t * 6 - 15) + 10); }
+
+  function zoomLayer() {
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(W * dpr));
+    cv.height = Math.max(1, Math.round(H * dpr));
+    const g = cv.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    return cv;
+  }
+
+  function startStageZoom(run) {
+    const SG = C.stages || {};
+    let ev = null;
+    for (let i = 0; i < run.events.length; i++) if (run.events[i].type === 'stage') { ev = run.events[i]; break; }
+    const k = clamp((ev && ev.shrink) || SG.shrink || 0.5, 0.1, 1);
+    // Fx of this last update (the bloom that filled the bar, drops) belong to the old field: bake them in too
+    handleEvents(run);
+    const L0 = zoomLayer(), L1 = zoomLayer(), L2 = zoomLayer();
+    paintGround(L0.getContext('2d'), W, H, 1337, true);
+    const g1 = L1.getContext('2d');
+    drawWet(g1, wetL, 0);
+    drawGreen(g1, wetL, 0, dpr, true);          // `all`: flush pending tiles so the layer is complete
+    const keep = ctx;
+    ctx = L2.getContext('2d');
+    try {
+      for (const r of linkRecs.values()) if (r.a > 0.003) drawVine(r);
+      drawPlants();
+      stepSplashes(ctx, splashes, 0);
+      drawFx(0);
+    } finally { ctx = keep; }
+    // Switch the render state to the new field: no old records, ghosts, vines or fx survive the swap
+    recs.clear(); drawList.length = 0; linkRecs.clear();
+    particles.length = 0; popups.length = 0; splashes.length = 0; petals.length = 0; rings.length = 0;
+    resetWeather();
+    // The grass only ever grows (syncSoil), so the shrunken soil needs a full rebuild of the layer + cache
+    resetWet(wetL);
+    soilT = 0;
+    syncSoil(wetL, run, 0, true);
+    // Queue every grown tile now; they paint over the next frames (burst budget) while the live core is
+    // still hidden under the opaque old soil layer (cA = 0 until p = 0.25), so the swap frame stays light
+    drawGreen(null, wetL, GREEN_TICK, dpr, false);
+    ZX = { run: run, k: k, stage: (ev && ev.stage) || run.stage, of: (ev && ev.of) || run.stageCount,
+      time: ev ? ev.time : (SG.timeAdd || 0), L0: L0, L1: L1, L2: L2, p: 0, tail: 0, burst: false, leafT: 0,
+      still: reduceMotion, maxD: Math.max(1, Math.hypot(W / 2, H / 2)), s: 1, z: 1 / k, gA: 1, sA: 1 };
+  }
+
+  // Progress and curves for this frame (p from run.zoom so a frame can be rendered at any exact moment)
+  function zoomStep(run, dt) {
+    const Z = ZX, zm = run.zoom;
+    Z.p = zm && zm === zoomRef ? clamp(zm.t / (zm.dur || 1), 0, 1) : 1;
+    if (Z.p >= 1) Z.tail += dt;
+    const p = Z.p, k = Z.k;
+    if (Z.still) {
+      // Reduced motion: no camera move, the old garden simply dissolves into the new one
+      Z.s = 1; Z.z = 1;
+      Z.gA = Z.sA = 1 - smooth01((p - 0.25) / 0.6);
+    } else {
+      Z.s = 1 + (k - 1) * smoother((p - 0.04) / 0.64);   // ends exactly at k, at rest (p = 0.68)
+      Z.z = Math.max(1, Z.s / k);
+      Z.gA = 1 - smooth01((p - 0.02) / 0.26);            // old sand -> live sand, early
+      Z.sA = 1 - smooth01((p - 0.66) / 0.28);            // old garden -> real core, at the end
+    }
+    Z.cA = Z.still ? 1 : smooth01((p - 0.25) / 0.4);   // live core fades in under the old soil
+  }
+
+  // Camera scale about the field centre (world -> device px)
+  function worldT(z) {
+    const cx = W / 2, cy = H / 2;
+    ctx.setTransform(dpr * z, 0, 0, dpr * z, (cx - cx * z) * dpr, (cy - cy * z) * dpr);
+  }
+  function screenT() { ctx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+  // One snapshot layer, scaled by s about the field centre, drawn in device px
+  function drawZoomLayer(cv, s, a) {
+    if (a <= 0.003) return;
+    const w = cv.width * s, h = cv.height * s;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = a;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(cv, (cv.width - w) / 2, (cv.height - h) / 2, w, h);
+    ctx.globalAlpha = 1;
+    screenT();
+  }
+
+  // Ground + soil while the zoom plays (replaces the cached ground blit and updateWet for those frames)
+  function drawZoomField(run, dt) {
+    const Z = ZX;
+    // Live sand, vector at camera scale (crisp at any zoom), then the old sand on top dissolving away
+    worldT(Z.z);
+    paintGround(ctx, W, H, 1337, true);
+    screenT();
+    drawZoomLayer(Z.L0, Z.s, Z.gA);
+    paintVignette(ctx, W, H);
+    // Live damp tint + grass (the shrunken core), under the old soil layer that shrinks onto it. It fades in
+    // while the opaque old layer still covers it, so frame 0 matches the last frame and nothing doubles.
+    worldT(Z.z);
+    ctx.globalAlpha = Z.cA;
+    updateWet(dt, null, run);
+    ctx.globalAlpha = 1;
+    screenT();
+    drawZoomLayer(Z.L1, Z.s, Z.sA);
+  }
+
+  // Cloud swell factor and brightening (0..1) for the growth beat
+  function zoomSwell() {
+    if (!ZX || ZX.still || ZX.p >= 1) return { r: 1, glow: 0 };
+    const w = clamp((ZX.p - 0.16) / 0.62, 0, 1), b = Math.sin(Math.PI * w);
+    // One big swell, then a small settle wobble that ends exactly at rest
+    return { r: 1 + 0.2 * b + 0.04 * Math.sin(3 * Math.PI * w) * w, glow: b };
+  }
+
+  // Effects of the growth beat, drawn in screen space around the live cloud
+  function zoomCloudFx(run, dt) {
+    const Z = ZX;
+    if (!Z || Z.still || Z.p >= 1) return;
+    const c = run.cloud, sw = zoomSwell(), cy = cloudDrawY(c.y, c.r);
+    // Soft daylight behind the cloud while it swells
+    if (sw.glow > 0.01) {
+      const R = c.r * 2.6;
+      const gr = ctx.createRadialGradient(c.x, cy, c.r * 0.3, c.x, cy, R);
+      gr.addColorStop(0, 'rgba(255,250,236,' + (0.38 * sw.glow) + ')');
+      gr.addColorStop(1, 'rgba(255,250,236,0)');
+      ctx.fillStyle = gr;
+      ctx.beginPath(); ctx.arc(c.x, cy, R, 0, 6.283); ctx.fill();
+    }
+    // At the peak: a ring of drops bursts out of the cloud and a gust ring rolls over the ground
+    if (!Z.burst && Z.p >= 0.44) {
+      Z.burst = true;
+      const n = 30;
+      for (let i = 0; i < n && particles.length < MAX_PARTICLES; i++) {
+        const a = (i / n) * 6.283 + Math.random() * 0.2, sp = 150 + Math.random() * 110;
+        particles.push({ x: c.x + Math.cos(a) * c.r * 0.9, y: cy + Math.sin(a) * c.r * 0.45, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * 0.6 - 60,
+          age: 0, life: 0.55 + Math.random() * 0.35, r: 1.8 + Math.random() * 1.6, color: i & 1 ? P.rainA : P.splash, g: 300 });
+      }
+      const rr = run.rainRadius || 60;
+      addRing(c.x, c.y, rr * 0.4, rr * 2.4, 0.8, P.splash, 3);
+      addRing(c.x, c.y, rr * 0.2, rr * 1.5, 0.6, P.rainB, 2);
+      for (let i = 0; i < 10; i++) {
+        const a = Math.random() * 6.283, d = Math.sqrt(Math.random()) * rr;
+        addSplash(splashes, c.x + Math.cos(a) * d, c.y + Math.sin(a) * d * 0.7);
+      }
+    }
+    // Leaves lift off the shrinking garden and drift outward (the garden is growing past the old edge)
+    if (Z.p > 0.06 && Z.p < 0.62) {
+      Z.leafT += dt;
+      const rate = 1 / 45, cx = W / 2, cy0 = H / 2, ex = W * 0.5 * Z.s, ey = H * 0.5 * Z.s;
+      let guard = 0;
+      while (Z.leafT >= rate && guard++ < 4) {
+        Z.leafT -= rate;
+        if (petals.length >= MAX_PETALS) break;
+        const a = Math.random() * 6.283, d = 0.55 + Math.random() * 0.45;
+        const x = cx + Math.cos(a) * ex * d, y = cy0 + Math.sin(a) * ey * d, v = 90 + Math.random() * 90;
+        const leaf = Math.random() < 0.8;
+        petals.push({ x: x, y: y, vx: Math.cos(a) * v, vy: Math.sin(a) * v * 0.6 - 70 - Math.random() * 60,
+          rot: Math.random() * 6.283, vr: (Math.random() - 0.5) * 9, w: 2 + Math.random() * 1.3, h: 4.5 + Math.random() * 3,
+          age: 0, life: 0.9 + Math.random() * 0.6,
+          color: leaf ? SW.leaf[(Math.random() * SW.leaf.length) | 0] : PETAL_COLS[(Math.random() * PETAL_COLS.length) | 0] });
+      }
+    }
+  }
+
+  // "Aşama 2/3" + "+12 sn": outlined text straight on the scene, centred above the field core
+  function drawStageTitle() {
+    const Z = ZX, p = Z.p;
+    const out = Z.tail > 0 ? 1 - smooth01(Z.tail / ZOOM_TAIL) : 1;
+    const inA = smooth01((p - 0.1) / 0.14);
+    const a = inA * out;
+    if (a <= 0.01) return;
+    const x = W / 2, y = clamp(H * 0.3, 120, H / 2 - 60);
+    const sc = Z.still ? 1 : 0.8 + 0.2 * eBack(clamp((p - 0.1) / 0.22, 0, 1));
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.globalAlpha = a;
+    ctx.translate(x, y); ctx.scale(sc, sc);
+    ctx.font = '800 50px Geist, "JetBrains Mono", system-ui, sans-serif';
+    ctx.lineWidth = 8;
+    ctx.strokeStyle = 'rgba(36,25,18,0.9)';
+    ctx.strokeText('Aşama ' + Z.stage + '/' + Z.of, 0, 0);
+    ctx.fillStyle = '#f7eddb';
+    ctx.fillText('Aşama ' + Z.stage + '/' + Z.of, 0, 0);
+    if (Z.time > 0) {
+      const b = smooth01((p - 0.2) / 0.14) * out;
+      if (b > 0.01) {
+        ctx.globalAlpha = b;
+        ctx.font = '700 26px Geist, "JetBrains Mono", system-ui, sans-serif';
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = 'rgba(60,40,10,0.88)';
+        ctx.strokeText('+' + Z.time + ' sn', 0, 48);
+        ctx.fillStyle = '#ffe9a8';
+        ctx.fillText('+' + Z.time + ' sn', 0, 48);
+      }
+    }
+    ctx.restore();
+  }
+
   // ---------- public ----------
   function resize() {
     if (!canvas) return;
@@ -1577,6 +2084,7 @@
     canvas.height = Math.round(H * dpr);
     buildGround();
     buildWet();
+    ZX = null;   // the stage zoom layers no longer match the canvas; the new field just shows
   }
 
   function init(cv) {
@@ -1607,11 +2115,22 @@
       if (scene) resetWet(wetL);
       particles.length = 0; popups.length = 0; drops.length = 0; splashes.length = 0;
       petals.length = 0; rings.length = 0; shakeT = 0; B = null;
-      recs.clear(); drawList.length = 0;
-      sweepRef = null; soilT = 0;
+      recs.clear(); drawList.length = 0; linkRecs.clear();
+      sweepRef = null; soilT = 0; resetWeather();
+      ZX = null; zoomRef = null;
       lastRun = scene;
       frozenEvents = false;
     }
+    // Stage up: snapshot the old field from render state before anything below switches to the new one
+    let eventsDone = false;
+    if (scene && !frozen && scene.zoom && scene.zoom !== zoomRef) {
+      zoomRef = scene.zoom;
+      startStageZoom(scene);
+      eventsDone = true;
+    }
+    if (ZX && (ZX.run !== scene || frozen)) ZX = null;
+    if (ZX) zoomStep(scene, dt);
+    const zooming = !!(ZX && ZX.p < 1);
     let ox = 0, oy = 0;
     if (shakeT > 0) {
       shakeT = Math.max(0, shakeT - dt);
@@ -1619,26 +2138,54 @@
       ox = (Math.random() - 0.5) * 2 * a; oy = (Math.random() - 0.5) * 2 * a;
     }
     ctx.setTransform(dpr, 0, 0, dpr, ox * dpr, oy * dpr);
-    if (ox || oy) ctx.drawImage(ground, -8, -8, W + 16, H + 16);
-    else ctx.drawImage(ground, 0, 0, W, H);
-    updateWet(dt, scene && !frozen ? scene : null, scene);
+    if (zooming) drawZoomField(scene, dt);
+    else {
+      if (ox || oy) ctx.drawImage(ground, -8, -8, W + 16, H + 16);
+      else ctx.drawImage(ground, 0, 0, W, H);
+      updateWet(dt, scene && !frozen ? scene : null, scene);
+    }
 
     if (scene) {
       updatePlants(dt, scene);
       syncBoss(scene, dt);
       // A finished run is no longer updated, so its last events would repeat every frame
-      if (!frozen || !frozenEvents) handleEvents(scene);
+      if ((!frozen || !frozenEvents) && !eventsDone) handleEvents(scene);
       if (frozen) frozenEvents = true;
       const c = scene.cloud;
       if (!frozen) drawSweep(scene, dt);
       drawBossDecals(scene);
       drawTarget(ctx, c.x, c.y, scene.rainRadius, scene.raining);
-      drawPlants();
+      const wdt = frozen ? 0 : dt;
+      drawShowerShadow(scene, wdt);
+      if (zooming) {
+        // Old garden shrinking onto the core, then the new world (vines late, plants popping in) at camera scale
+        drawZoomLayer(ZX.L2, ZX.s, ZX.sA);
+        worldT(ZX.z);
+        if (ZX.p > 0.9) drawLinks(scene, dt);
+        drawPlants();
+        screenT();
+      } else {
+        drawLinks(scene, frozen ? 0 : dt);
+        drawPlants();
+      }
+      drawVapor(scene, wdt);
+      drawSplashFlyers(scene);
       if (scene.raining) drawRain(dt, scene);
+      drawBigDrops(scene);
       stepSplashes(ctx, splashes, dt);
-      const low = scene.tank > 0 ? 1 - scene.water / scene.tank : 1;
+      drawMinis(scene, wdt);
+      drawShowerCloud(scene, wdt);
+      let low = scene.tank > 0 ? 1 - scene.water / scene.tank : 1;
+      let cr = c.r;
+      if (zooming) {
+        // Growth beat: the cloud keeps its size while the world shrinks, and swells once to sell it
+        zoomCloudFx(scene, dt);
+        const sw = zoomSwell();
+        cr *= sw.r;
+        low *= 1 - 0.7 * sw.glow;
+      }
       // Opaque on purpose: the two flat layers would show a seam if drawn translucent
-      drawCloud(c.x, c.y, c.r, low, scene.raining ? 0.03 : 0.012);
+      drawCloud(c.x, c.y, cr, low, scene.raining ? 0.03 : 0.012);
       drawBossOverlay();
       // Behind the results panel: no floating text (the celebration already played during the win hold)
       if (frozen) popups.length = 0;
@@ -1649,6 +2196,10 @@
       drawCloud(x, y, 52, 0.25, 0.015);
     }
     drawFx(dt);
+    if (ZX) {
+      drawStageTitle();
+      if (ZX.p >= 1 && ZX.tail >= ZOOM_TAIL) ZX = null;   // done: drop the snapshot layers
+    }
   }
 
   RD.Render = {

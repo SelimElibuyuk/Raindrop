@@ -20,26 +20,30 @@
 
   // ---------- Inline icons (24x24, currentColor) ----------
   function svg(cls, body) { return '<svg class="ico ' + cls + '" viewBox="0 0 24 24" aria-hidden="true">' + body + '</svg>'; }
+  // game-icons.net paths are drawn on a 512 grid; scale them into the 24x24 viewBox (credits: tree footer).
+  function gi(body) { return '<g transform="scale(.046875)">' + body + '</g>'; }
   const ICON_BODY = {
     drop: '<path d="M12 3C9 8 6 11 6 15a6 6 0 0 0 12 0c0-4-3-7-6-12z"/>',
-    rain: '<path d="M7 14a4 4 0 0 1-.6-7.96A5.5 5.5 0 0 1 17 7a3.6 3.6 0 0 1 .5 7.1L7 14z"/>' +
-      '<path d="M8 17.5l-1 3M12 17.5l-1 3M16 17.5l-1 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+    // "raining" by Lorc, game-icons.net, CC BY 3.0
+    rain: gi('<path d="M305 19.438c-46.49 0-85.118 32.184-95.844 75.374l-4.656 18.75-11.813-15.28C179.864 81.69 160.21 70.75 137.844 70.75c-38.486 0-69.97 31.515-69.97 70.063 0 6.083 1.424 12.16 3.314 18.812l2.937 10.406-10.688 1.44c-24.95 3.297-44.374 24.6-44.374 50.56 0 28.264 22.848 51.126 51.062 51.126 18.228 0 34.287-9.818 43.313-24.28l6.968-11.157 8.22 10.218c15.42 19.07 38.945 31.343 65.343 31.343 30.613 0 56.55-16.175 71.31-40.686l7.94-13.188 8.03 13.156c8.978 14.675 24.76 24.22 43.28 24.22 14.95 0 28.317-6.327 37.626-16.5l6.47-7.063 6.905 6.624c12.575 12.055 29.132 19.375 47.845 19.375 38.486 0 69.938-31.485 69.938-70.033 0-38.547-31.365-69.468-69.938-69.468-2.974 0-5.754.17-8.625.53l-10.375 1.313-.125-10.47c-.61-54.307-44.804-97.656-99.25-97.656zm42.47 258.125c-5.813 2.026-11.97 3.332-18.345 3.75l7.594 26.625 17.874-5.375-7.125-25zm-213.158 1.125l10.063 35.25 17.875-5.344-4.97-17.438c-8.218-3.173-15.918-7.404-22.968-12.47zm263 1.25l14.125 49.5 17.875-5.344-11.5-40.375c-7.104-.45-13.97-1.733-20.5-3.783zm-309.125 9.468c-5.757 1.582-11.81 2.438-18.062 2.438-.22 0-.436-.03-.656-.03l11.81 41.467 17.876-5.374-10.97-38.5zm131.97 5.125c-5.972 1.595-12.163 2.652-18.532 3.126l8.97 31.438 17.874-5.375-8.314-29.19zm70.624 7.064l-17.905 5.375 16.313 57.217 17.906-5.375-16.313-57.218zM366.72 345l-17.908 5.375 10.063 35.313 17.906-5.375L366.72 345zm-192.345 6.03l-17.906 5.376 9 31.53 17.874-5.373-8.97-31.532zm66.22 15.126l-17.907 5.375 16.937 59.44 17.906-5.376-16.936-59.438zm200.843.375l-17.907 5.376 12.19 42.656 17.874-5.375-12.156-42.656zm-330.157 3.814l-17.905 5.375 14.47 50.75 17.905-5.376-14.47-50.75zm207.907 30.937l-17.875 5.345 15.875 55.688 17.875-5.375-15.875-55.657zm69.688 21.47l-17.906 5.375 8.592 30.188 17.938-5.375-8.625-30.188zM195.47 425l-17.907 5.375 9.03 31.688 17.907-5.375L195.47 425zm270.25 26.625L447.81 457l10.5 36.844h19.438l-12.03-42.22zM137.843 463.53l-17.875 5.376 7.093 24.938H146.5l-8.656-30.313zm131.78 4.5l-17.874 5.376 5.813 20.438H277l-7.375-25.813z"/>'),
     flower: '<circle cx="12" cy="6.6" r="3.6"/><circle cx="17.4" cy="12" r="3.6"/><circle cx="12" cy="17.4" r="3.6"/>' +
       '<circle cx="6.6" cy="12" r="3.6"/><circle cx="12" cy="12" r="2.6" class="ico-core"/>',
     wind: '<path d="M3 9h10.5a3 3 0 1 0-3-3M3 13.5h15a3 3 0 1 1-3 3M3 18h6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
-    hourglass: '<path d="M7 3.5h10M7 20.5h10M8 3.5c0 5 4 6 4 8.5s-4 3.5-4 8.5M16 3.5c0 5-4 6-4 8.5s4 3.5 4 8.5" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+    // "hourglass" by Lorc, game-icons.net, CC BY 3.0
+    hourglass: gi('<path d="M92.656 19.188v41.5h331.72v-41.5H92.655zM119.5 79.374V433.53h22.28V79.376H119.5zm46.594 0c3.212 43.324 13.312 82.022 27.78 110.906 17.685 35.304 40.845 54.75 64.064 54.75 23.218 0 46.346-19.446 64.03-54.75 14.47-28.883 24.57-67.58 27.782-110.905H166.094zm209.156 0V433.53h22.28V79.376h-22.28zm-117.313 185.22c-23.218 0-46.378 19.415-64.062 54.717-14.835 29.614-25.098 69.562-28.03 114.22H350c-2.933-44.658-13.197-84.606-28.03-114.22-17.686-35.302-40.814-54.718-64.033-54.718zM92.657 452.218v41.467h331.718V452.22H92.655z"/>'),
     storm: '<path d="M7 14a4 4 0 0 1-.6-7.96A5.5 5.5 0 0 1 17 7a3.6 3.6 0 0 1 .5 7.1L7 14z"/>' +
       '<path d="M12.5 13l-2.5 4h3l-1.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
     bolt: '<path d="M13.5 2.5L5.5 13.5h5.2l-1.2 8 8-11h-5.2z"/>',
-    lock: '<rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
+    // "padlock" by Lorc, game-icons.net, CC BY 3.0
+    lock: gi('<path d="M254.28 17.313c-81.048 0-146.624 65.484-146.624 146.406V236h49.594v-69.094c0-53.658 43.47-97.187 97.03-97.187 53.563 0 97.032 44.744 97.032 97.186V236h49.594v-72.28c0-78.856-65.717-146.407-146.625-146.407zM85.157 254.688c-14.61 22.827-22.844 49.148-22.844 76.78 0 88.358 84.97 161.5 191.97 161.5 106.998 0 191.968-73.142 191.968-161.5 0-27.635-8.26-53.95-22.875-76.78H85.155zM254 278.625c22.34 0 40.875 17.94 40.875 40.28 0 16.756-10.6 31.23-25.125 37.376l32.72 98.126h-96.376l32.125-98.125c-14.526-6.145-24.532-20.62-24.532-37.374 0-22.338 17.972-40.28 40.312-40.28z"/>'),
   };
   function icon(name, cls) { return svg((cls || '') + ' ico-' + name, ICON_BODY[name] || ICON_BODY.storm); }
   function coinIcon(cls) {
-    return svg('coin-ico ' + (cls || ''), '<circle cx="12" cy="12" r="10" class="c1"/><circle cx="12" cy="12" r="6" fill="none" class="c2" stroke-width="2"/>');
+    return svg('coin-ico ' + (cls || ''), gi('<path class="c1" d="M264.4 95.01c-35.6-.06-80.2 11.19-124.2 34.09C96.27 152 61.45 182 41.01 211.3c-20.45 29.2-25.98 56.4-15.92 75.8 10.07 19.3 35.53 30.4 71.22 30.4 35.69.1 80.29-11.2 124.19-34 44-22.9 78.8-53 99.2-82.2 20.5-29.2 25.9-56.4 15.9-75.8-10.1-19.3-35.5-30.49-71.2-30.49zm91.9 70.29c-3.5 15.3-11.1 31-21.8 46.3-22.6 32.3-59.5 63.8-105.7 87.8-46.2 24.1-93.1 36.2-132.5 36.2-18.6 0-35.84-2.8-50.37-8.7l10.59 20.4c10.08 19.4 35.47 30.5 71.18 30.5 35.7 0 80.3-11.2 124.2-34.1 44-22.8 78.8-52.9 99.2-82.2 20.4-29.2 26-56.4 15.9-75.7zm28.8 16.8c11.2 26.7 2.2 59.2-19.2 89.7-18.9 27.1-47.8 53.4-83.6 75.4 11.1 1.2 22.7 1.8 34.5 1.8 49.5 0 94.3-10.6 125.9-27.1 31.7-16.5 49.1-38.1 49.1-59.9 0-21.8-17.4-43.4-49.1-59.9-16.1-8.4-35.7-15.3-57.6-20zm106.7 124.8c-10.2 11.9-24.2 22.4-40.7 31-35 18.2-82.2 29.1-134.3 29.1-21.2 0-41.6-1.8-60.7-5.2-23.2 11.7-46.5 20.4-68.9 26.1 1.2.7 2.4 1.3 3.7 2 31.6 16.5 76.4 27.1 125.9 27.1s94.3-10.6 125.9-27.1c31.7-16.5 49.1-38.1 49.1-59.9z"/>'));   // "two-coins" by Delapouite, game-icons.net, CC BY 3.0
   }
   // Icon per branch (unknown/future branches fall back to the storm icon) and per stat where it reads better.
   const BRANCH_ICON = { water: 'drop', rain: 'rain', bounty: 'flower', time: 'hourglass', storm: 'storm', wind: 'wind' };
-  const STAT_ICON = { cloudSpeed: 'wind', timeBonus: 'hourglass', dew: 'drop', drainReduce: 'drop', tank: 'drop' };
+  const STAT_ICON = { cloudSpeed: 'wind', timeBonus: 'hourglass', dew: 'drop', drainReduce: 'drop', tank: 'drop', miniClouds: 'rain', miniRate: 'rain', miniSpeed: 'wind', moistOn: 'drop', moistRate: 'drop', showerOn: 'rain', showerSize: 'rain', showerFreq: 'hourglass' };
   function nodeIcon(u) { return STAT_ICON[u.stat] || BRANCH_ICON[u.branch] || 'storm'; }
 
   // Flower unlock nodes (a flower's chanceStat) show the bloomed flower drawn by RD.Flora, else the flower icon.
@@ -189,7 +193,7 @@
 
   // ---------- Level bar / boss panel (PRD §12) ----------
   // lv.run/lv.mode: which run and which layout ('bar' | 'boss') the panel was built for.
-  const lv = { run: null, mode: null, nodes: null, toastTimer: 0 };
+  const lv = { run: null, mode: null, nodes: null, toastTimer: 0, stage: 1 };
 
   function flowerImg(type, px, cls) {
     const src = RD.Flora && type ? RD.Flora.icon(type, px) : '';
@@ -204,9 +208,11 @@
     const level = run.level;
     el.h_level.className = 'hud-level';
     el.h_level.innerHTML =
-      '<div class="lv-top"><div class="lv-name">' + levelTitle(level) + '</div><span class="lv-num" id="lv-num"></span></div>' +
+      '<div class="lv-top"><div class="lv-name">' + levelTitle(level) + '</div>' +
+        '<span class="lv-stage" id="lv-stage" hidden></span><span class="lv-num" id="lv-num"></span></div>' +
       '<canvas class="hud-cv lv-cv" id="lv-cv" aria-hidden="true"></canvas>';
-    lv.nodes = { num: $('lv-num'), cv: makeCv('grow', $('lv-cv')) };
+    lv.nodes = { num: $('lv-num'), stage: $('lv-stage'), cv: makeCv('grow', $('lv-cv')) };
+    lv.stage = run.stage || 1;
   }
 
   function buildBossPanel(run) {
@@ -262,6 +268,13 @@
     if (mode === 'bar') {
       drawGrow(run);
       setText('lv_num', n.num, fmtInt(Math.floor(Math.min(run.barPoints, run.barTarget) + 1e-6)) + '/' + fmtInt(run.barTarget));
+      // Growing-garden stage (PRD §19); hidden for single-stage runs
+      const staged = run.stageCount > 1;
+      setHidden('lv_sth', n.stage, !staged);
+      if (staged) {
+        setText('lv_st', n.stage, 'Aşama ' + run.stage + '/' + run.stageCount);
+        if (lv.stage !== run.stage) { lv.stage = run.stage; if (!reducedMotion()) pop(n.stage); }
+      }
       return;
     }
     const boss = run.boss;
@@ -389,6 +402,8 @@
     const pts = Math.min(level.barTarget, Math.floor((result.bar || 0) * level.barTarget + 1e-6));
     return '<div class="res-level">' +
         '<div class="res-level-name">' + flowerImg(level.boss.type, 48, 'res-lv-ico') + '<span>' + levelTitle(level) + '</span></div>' +
+        (result.stageCount > 1
+          ? '<div class="res-boss-line"><span>Aşama: <b>' + result.stage + '/' + result.stageCount + '</b></span></div>' : '') +
         '<div class="res-boss-line"><span>Yeşillik barı: <b>' + pts + '/' + level.barTarget + '</b></span></div>' +
         resBar(pts / level.barTarget, 'bar-level') +
       '</div>';
@@ -447,7 +462,7 @@
   const BRANCH_LABEL = { water: 'Su', rain: 'Yağmur', bounty: 'Bereket', time: 'Mevsim', storm: 'Fırtına', wind: 'Rüzgar' };
   const UNIT = { tank: ' su', rainRadius: '', rainRate: '', cloudSpeed: '', coinBonus: ' para', roseBonus: ' para',
     plantCount: '', daisyChance: '', tulipChance: '', lavenderChance: '', bluebellChance: '', roseChance: '', sunflowerChance: '', skylilyChance: '', needReduce: '',
-    coinMul: '', sunflowerMul: '', comboMax: '', comboStep: '', timeChance: '', leftoverGold: ' altın', dew: ' su', timeBonus: ' sn', drainReduce: ' su/sn', rainCostReduce: ' su/sn' };
+    coinMul: '', sunflowerMul: '', comboMax: '', comboStep: '', timeChance: '', critChance: '', goldChance: '', critSec: ' sn', dropRate: '', goldMul: '', leftoverGold: ' altın', dew: ' su', timeBonus: ' sn', drainReduce: ' su/sn', rainCostReduce: ' su/sn', splashChance: '', splashSec: ' sn', splashCount: ' çiçek', linkChance: '', miniClouds: '', miniRate: '', miniSpeed: '', moistOn: '', moistRate: ' su/sn', showerOn: '', showerSize: '', showerFreq: ' sn' };
   const tree = {
     built: false, view: { x: 0, y: 0, z: 1 }, selected: null, needCenter: true,
     seen: null, sp: 0, pointers: new Map(), g: null, lastTap: { id: null, t: 0 },
@@ -462,7 +477,8 @@
   // Player-facing stat names; the detail panel shows the real stat value now -> next ("Şiddet 3 → 4").
   const STAT_NAME = { tank: 'Depo', rainRadius: 'Alan', rainRate: 'Şiddet', cloudSpeed: 'Hız', coinBonus: 'Çiçek başına', roseBonus: 'Gül başına',
     plantCount: 'Bitki', daisyChance: 'Papatya ihtimali', tulipChance: 'Lale ihtimali', lavenderChance: 'Lavanta ihtimali', bluebellChance: 'Çan çiçeği ihtimali', roseChance: 'Gül ihtimali', sunflowerChance: 'Ayçiçeği ihtimali',
-    skylilyChance: 'Gök zambağı ihtimali', needReduce: 'Su ihtiyacı', coinMul: 'Para çarpanı', sunflowerMul: 'Ayçiçeği çarpanı', clusterChance: 'Küme ihtimali', respawnChance: 'Yeni fidan', comboMax: 'En yüksek kombo', comboStep: 'Kombo adımı', timeChance: 'Ek süre ihtimali', leftoverGold: 'Kalan su altını', dew: 'Çiçek başına', timeBonus: 'Ek süre', drainReduce: 'Buharlaşma', rainCostReduce: 'Yağmur tüketimi' };
+    skylilyChance: 'Gök zambağı ihtimali', needReduce: 'Su ihtiyacı', coinMul: 'Para çarpanı', sunflowerMul: 'Ayçiçeği çarpanı', clusterChance: 'Küme ihtimali', respawnChance: 'Yeni fidan', comboMax: 'En yüksek kombo', comboStep: 'Kombo adımı', timeChance: 'Ek süre ihtimali', critChance: 'Kritik ihtimali', critSec: 'Kritik gücü', dropRate: 'Damla sıklığı', goldChance: 'Altın ihtimali', goldMul: 'Altın çarpanı', leftoverGold: 'Kalan su altını', dew: 'Çiçek başına', timeBonus: 'Ek süre', drainReduce: 'Buharlaşma', rainCostReduce: 'Yağmur tüketimi', splashChance: 'Sekme ihtimali', splashSec: 'Sekme suyu', splashCount: 'Sekme hedefi', linkChance: 'Bağlantı ihtimali',
+    miniClouds: 'Mini bulut', miniRate: 'Bulutçuk şiddeti', miniSpeed: 'Bulutçuk hızı', moistOn: 'Nemli toprak', moistRate: 'Toprak suyu', showerOn: 'Ani yağmur', showerSize: 'Yağmur alanı', showerFreq: 'Yağmur sıklığı' };
 
   function fmtNum(v) { return String(Math.round(v * 10) / 10); }
 
@@ -478,10 +494,15 @@
     return s[u.stat];
   }
 
-  const MUL_STATS = { coinMul: 1, sunflowerMul: 1, comboMax: 1 };
+  const MUL_STATS = { coinMul: 1, sunflowerMul: 1, comboMax: 1, goldMul: 1 };
   function fmtEffect(u, lv) {
     const v = statAt(u, lv);
     if (MUL_STATS[u.stat]) return '×' + (Math.round(v * 100) / 100);
+    // Switch nodes (0/1), and stats whose shown value derives from a CONFIG block
+    if (u.stat === 'moistOn' || u.stat === 'showerOn') return v > 0 ? 'Açık' : 'Kapalı';
+    if (u.stat === 'moistRate') return fmtNum(RD.CONFIG.moist.rate + RD.CONFIG.moist.step * v) + ' su/sn';
+    if (u.stat === 'showerSize') return fmtNum(RD.CONFIG.shower.r + RD.CONFIG.shower.rStep * v);
+    if (u.stat === 'showerFreq') { const S = RD.CONFIG.shower; return fmtNum(Math.max(S.minInterval, S.interval - S.step * v)) + ' sn'; }
     if (u.stat === 'needReduce') return '−' + fmtNum(v);
     if (/Chance$/.test(u.stat || '')) return '%' + fmtNum(v);   // chance values are the only place % is allowed
     const plus = (u.stat === 'coinBonus' || u.stat === 'roseBonus' || u.stat === 'dew' || u.stat === 'timeBonus') ? '+' : '';
@@ -516,7 +537,8 @@
           '</div>' +
           '<aside class="tree-detail" id="tree-detail" hidden></aside>' +
         '</div>' +
-        '<footer class="tree-foot"><button class="btn btn-primary btn-big btn-wide" id="shop-start">' + icon('rain', 'btn-ico') + 'Yağmura Başla</button></footer>' +
+        '<footer class="tree-foot"><button class="btn btn-primary btn-big btn-wide" id="shop-start">' + icon('rain', 'btn-ico') + 'Yağmura Başla</button>' +
+          '<p class="credits">İkonlar: Lorc, Delapouite (game-icons.net, CC BY 3.0)</p></footer>' +
       '</div>';
     el.t_vp = $('tree-vp'); el.t_world = $('tree-world'); el.t_detail = $('tree-detail');
     el.t_nodes = $('tree-nodes');

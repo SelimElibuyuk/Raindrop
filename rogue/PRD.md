@@ -223,3 +223,31 @@ Kaynak: kullanıcının yapılacaklar listesi (kritik, combo, özel upgrade, run
 - "Tohum" düğümü: seviye başına +5 bitki (5 seviye). "Tohum Rüzgarı" da +5 bitki.
 - Tohum'a bağlı ayrı düğüm "Filizlenme": açan çiçek seviye başına +%1.5 ihtimalle yeni fidan bırakır (5 seviye, en fazla %7.5). "Tohum Kümesi" artık Filizlenme'nin altında.
 - (2026-11-22, revize) Yağmurla yeşerme tüm bölümlerde belirgin yavaşladı (zemine giden yağmur 1.2× → 0.5×). Çiçek açınca yeşeren küçük alan değişmedi.
+
+## 17. Crit (big drop) and golden flowers (2026-11-23)
+- **Big drop:** while raining the cloud drops one visible big drop every 0.6 s (Damla Sıklığı: −0.1 s per level, min 0.3 s)
+  onto a random growing plant or open boss part under the rain. Each landing rolls the crit chance (base %5, Kritik +%5).
+- **Crit = a jump, not an instant bloom:** adds `rain strength × (2 s + Ağır Damla s)` of water at once. Tied to rain,
+  not to the flower's need, so flower water needs can change later and boss parts get a fair, small push
+  (shield/shade bosses only take it when normal rain would count).
+- **Golden flower:** any type; each placed plant rolls %1 (Altın Tohum +%1). Drawn fully gold with a sparkle.
+  Pays its own coins × 5 (Altın Değer +×2); bar progress as a normal flower. One shared branch, not per flower.
+- Old "Altın Gül" node renamed "Gül Bahçıvanı" to avoid confusion.
+
+## 18. Etkileşim özellikleri (2026-11-23, kullanıcı kararları)
+- Çiçek özellikleri (lavanta kombo ×2, çan suyu, ayçiçeği 2. açış, gök zambağı solması) şimdilik kaldırıldı.
+- Su Sekmesi: açan çiçek ihtimalle en yakın çiçeğe/çiçeklere su sektirir (zincirlenebilir).
+- Kök Bağı: run başında uzak iki çiçek bağlanır; biri yağmurdayken diğeri de sulanır. Komboya sayılmaz.
+- Bulutçuk: kendi kendine en yakın çiçeğe giden, deposuz mini bulut. Komboya sayılmaz, kritik yok.
+- Nemli Toprak: yeşil zemindeki çiçekler kendiliğinden yavaşça sulanır.
+- Ani Yağmur: 20 sn'de bir (Sık Yağmur ile en az 12 sn) rastgele bir çiçeğin üstüne uyarılı kısa bir sağanak.
+  Merkez seçilen çiçekten r×0.25–0.55 kaydırılır (rastgele görünsün, çiçek yine içeride).
+- Denge sonra: önce tüm özellikler eklenecek (kullanıcı kararı).
+
+## 19. Büyüyen bahçe: aşamalar (2026-11-23, kullanıcı kararları)
+- Bölümler kalıyor. Her run 3 aşama: bar her dolduğunda "uzaklaşma" olur; 3. dolumda boss sahanın ortasında belirir.
+- Uzaklaşmada saha aynı boyda kalır (bulut da aynı boy): eski sulanan alan ortada küçük yeşil bir çekirdek olur,
+  eski çiçekler silinir, yeni ve daha kaliteli çiçekler gelir. Bar sıfırlanır, gereksinim artar, süreye ekleme gelir,
+  su aynen devam eder. Bar dolmazsa run biter; tekrar 1. aşamadan başlanır.
+- Önemli olan his: kamera geri çekiliyormuş, bahçe büyüyormuş, bulut büyüyormuş gibi görünmeli.
+- Kart seçimi bu molaya eklenecek (sonraki adım).

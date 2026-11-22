@@ -36,6 +36,23 @@
       leftoverGold: 0,     // extra gold per greened area from leftover water (base pay is CONFIG.leftover.gold)
       drainReduce: 0,      // su/sn removed from passive drain
       rainCostReduce: 0,   // su/sn removed from rain cost
+      critChance: 5,       // % chance that a falling big drop is a crit (waters a plant for rainRate x critSec seconds)
+      critSec: 0,          // extra seconds of watering added to bigDrop.critSec
+      dropRate: 0,         // levels: each shortens the big-drop interval by bigDrop.step
+      goldChance: 1,       // % chance that a spawned plant is golden
+      goldMul: 5,          // x coin multiplier of a golden flower
+      splashChance: 0,     // % chance a bloom splashes water onto nearby flowers
+      splashSec: 0,        // extra seconds of watering per splash
+      splashCount: 0,      // extra splash targets
+      linkChance: 0,       // % chance per plant to be linked with a distant partner
+      miniClouds: 0,       // number of mini clouds that water plants on their own
+      miniRate: 0,         // extra water/s of every mini cloud
+      miniSpeed: 0,        // levels: each adds mini.speedStep px/s
+      moistOn: 0,          // 1 = flowers on greened ground water themselves
+      moistRate: 0,        // levels: each adds moist.step water/s
+      showerOn: 0,         // 1 = sudden showers happen
+      showerSize: 0,       // levels: each adds shower.rStep px of radius
+      showerFreq: 0,       // levels: each shortens the shower interval by shower.step s
     },
     speedPx: 65,
 
@@ -75,11 +92,11 @@
       cactus:    { bar: 1, label: 'Kaktüs',      need: 3,  coins: 1,  color: '#7a9e6a', bloom: '#f2c14e' },
       daisy:     { bar: 2, chanceStat: 'daisyChance', baseChance: 0, label: 'Papatya',     need: 5,  coins: 3,  color: '#8cb488', bloom: '#f3ede2' },
       tulip:     { bar: 3, chanceStat: 'tulipChance', baseChance: 10, label: 'Lale',        need: 7,  coins: 5,  color: '#6f9e6a', bloom: '#e07a4f' },
-      lavender:  { bar: 4, chanceStat: 'lavenderChance', baseChance: 0, label: 'Lavanta',     need: 5,  coins: 3,  color: '#7f9c86', bloom: '#a58ad0', comboX: 2 },
-      bluebell:  { bar: 5, chanceStat: 'bluebellChance', baseChance: 0, label: 'Çan Çiçeği',  need: 7,  coins: 2,  color: '#6e9a7a', bloom: '#6f93d6', refund: 5 },
+      lavender:  { bar: 4, chanceStat: 'lavenderChance', baseChance: 0, label: 'Lavanta',     need: 5,  coins: 3,  color: '#7f9c86', bloom: '#a58ad0' },
+      bluebell:  { bar: 5, chanceStat: 'bluebellChance', baseChance: 0, label: 'Çan Çiçeği',  need: 7,  coins: 2,  color: '#6e9a7a', bloom: '#6f93d6' },
       rose:      { bar: 6, chanceStat: 'roseChance', baseChance: 10, label: 'Gül',         need: 10, coins: 8,  color: '#6a9a66', bloom: '#d65c7a', bonusStat: 'roseBonus' },
-      sunflower: { bar: 7, chanceStat: 'sunflowerChance', baseChance: 10, label: 'Ayçiçeği',    need: 12, coins: 7,  color: '#78a05e', bloom: '#e9b23c', mulStat: 'sunflowerMul', rebloom: 1 },
-      skylily:   { bar: 10, chanceStat: 'skylilyChance', baseChance: 0, label: 'Gök Zambağı', need: 28, coins: 30, color: '#5f8e86', bloom: '#4d5fa8', wilt: 3 },
+      sunflower: { bar: 7, chanceStat: 'sunflowerChance', baseChance: 10, label: 'Ayçiçeği',    need: 12, coins: 7,  color: '#78a05e', bloom: '#e9b23c', mulStat: 'sunflowerMul' },
+      skylily:   { bar: 10, chanceStat: 'skylilyChance', baseChance: 0, label: 'Gök Zambağı', need: 28, coins: 30, color: '#5f8e86', bloom: '#4d5fa8' },
     },
     // Levels (PRD §12, §14). Greening soil and blooms fill the level bar (see greenShare / bossNeed).
     // A full bar summons the boss (bonus water/time). Watering the boss through its trick clears the level,
@@ -95,7 +112,19 @@
     greenHard: 1.7,       // greenNeed and lushSoil × greenHard^(level − 1): level 2 needs 1.7× water, level 3 2.9× (PRD §16)
     // Flower points (plants[].bar) needed for the bloom part of the bar: base × mul^(level − 1) → 15, 30, 60 (PRD §15)
     bossNeed: { base: 15, mul: 2 },
+    // Growing-garden stages (PRD §19): a full bar zooms the view out (stage up) until the last stage, whose full bar
+    // spawns the boss in the middle. The field keeps its size; the old green shrinks into a central core (shrink),
+    // old plants are cleared and a fresh, better set is planted. needMul[i]: bloom points needed in stage i+1 (× bossNeed).
+    stages: { count: 3, needMul: [1, 1.5, 2.2], chanceBonus: 10, timeAdd: 12, shrink: 0.5, pause: 1.8 },
     timeChanceSec: 1,     // s added when a bloom rolls stats.timeChance
+    // Big drops: while raining one drop falls every max(minInterval, interval - step*dropRate) s;
+    // a crit drop waters rainRate x (critSec + stats.critSec) s worth of water at once
+    bigDrop: { interval: 0.6, minInterval: 0.3, step: 0.1, fall: 0.3, critSec: 2 },
+    splash: { sec: 1, count: 1, fly: 0.4 },   // bloom splash: watering seconds, targets, flight time (s)
+    mini: { r: 26, rateMul: 0.5, speed: 45, speedStep: 20 },   // mini clouds: rain radius, water/s = rainRate*rateMul + miniRate, px/s
+    moist: { rate: 0.5, step: 0.5 },                           // moist soil: water/s = rate + step*moistRate
+    shower: { interval: 20, step: 2, minInterval: 12, warn: 1.2, dur: 3.5, r: 70, rStep: 14, rate: 3 },   // sudden shower
+    link: { minDist: 160 },                   // linked flowers: min distance between partners (px)
     leftover: { waterPerArea: 5, gold: 1 },  // run end: every waterPerArea su left greens one area → gold (+ stats.leftoverGold)
     bloomGreen: { radius: 44, soil: 6 },   // a bloom soaks/greens a small patch around the plant
     victory: { speed: 460, hold: 0.9 },    // boss win: green wave from the boss outward (px/s), then hold (s)
@@ -122,52 +151,75 @@
       { id: 'core', label: 'Bulut', desc: 'Her şeyin başladığı yer', kind: 'root', max: 1, pos: [0, 0] },
 
       // Water / tank (up)
-      { id: 'tank',      branch: 'water',  label: 'Depo',            desc: '+20 su',                   stat: 'tank',           kind: 'add', per: 20,   max: 5, baseCost: 8,     growth: 1.6,  parent: 'core',      need: 1, pos: [0, -1] },
-      { id: 'tank2',     branch: 'water',  label: 'Büyük Depo',      desc: '+40 su',                   stat: 'tank',           kind: 'add', per: 40,   max: 4, baseCost: 60,    growth: 2,    parent: 'tank',      need: 3, pos: [0, -2] },
-      { id: 'seal',      branch: 'water',  label: 'Sızdırmazlık',    desc: '−1 su/sn buharlaşma',      stat: 'drainReduce',    kind: 'add', per: 1,    max: 2, baseCost: 40,    growth: 2.5,  parent: 'tank',      need: 2, pos: [-1, -2] },
-      { id: 'dew',       branch: 'water',  label: 'Çiy',             desc: 'Açan çiçek +1 su',         stat: 'dew',            kind: 'add', per: 1,    max: 3, baseCost: 500,   growth: 2.5,  parent: 'tank2',     need: 2, pos: [0, -3] },
-      { id: 'thrift',    branch: 'water',  label: 'Verimli Yağmur',  desc: '−1 su/sn yağmur tüketimi', stat: 'rainCostReduce', kind: 'add', per: 1,    max: 4, baseCost: 100,   growth: 2.1,  parent: 'seal',      need: 1, pos: [-1, -3] },
+      { id: 'tank',      branch: 'water',  label: 'Depo',            desc: '+20 su',                   stat: 'tank',           kind: 'add', per: 20,   max: 5, baseCost: 8,     growth: 1.6,  parent: 'core',      need: 1, pos: [0, -2.65] },
+      { id: 'tank2',     branch: 'water',  label: 'Büyük Depo',      desc: '+40 su',                   stat: 'tank',           kind: 'add', per: 40,   max: 4, baseCost: 60,    growth: 2,    parent: 'tank',      need: 3, pos: [0, -3.9] },
+      { id: 'seal',      branch: 'water',  label: 'Sızdırmazlık',    desc: '−1 su/sn buharlaşma',      stat: 'drainReduce',    kind: 'add', per: 1,    max: 2, baseCost: 40,    growth: 2.5,  parent: 'tank',      need: 2, pos: [-1.25, -3.9] },
+      { id: 'dew',       branch: 'water',  label: 'Çiy',             desc: 'Açan çiçek +1 su',         stat: 'dew',            kind: 'add', per: 1,    max: 3, baseCost: 500,   growth: 2.5,  parent: 'tank2',     need: 2, pos: [0, -5.15] },
+      { id: 'thrift',    branch: 'water',  label: 'Verimli Yağmur',  desc: '−1 su/sn yağmur tüketimi', stat: 'rainCostReduce', kind: 'add', per: 1,    max: 4, baseCost: 100,   growth: 2.1,  parent: 'seal',      need: 1, pos: [-1.25, -5.15] },
+      { id: 'splash',     branch: 'water',  label: 'Su Sekmesi',      desc: 'Sekme ihtimali +%10',      stat: 'splashChance',   kind: 'add', per: 10,   max: 5, baseCost: 200,   growth: 2.2,  parent: 'dew',       need: 1, pos: [0, -6.4] },
+      { id: 'splashpow',  branch: 'water',  label: 'Sekme Gücü',      desc: '+1 sn sekme suyu',         stat: 'splashSec',      kind: 'add', per: 1,    max: 3, baseCost: 500,   growth: 2.4,  parent: 'splash',    need: 1, pos: [-1.25, -6.4] },
+      { id: 'splashmulti',branch: 'water',  label: 'Çoklu Sekme',     desc: 'Sekme +1 çiçeğe',          stat: 'splashCount',    kind: 'add', per: 1,    max: 2, baseCost: 1500,  growth: 3,    parent: 'splash',    need: 1, pos: [0, -7.65] },
 
       // Storm (up-right, late)
-      { id: 'storm',     branch: 'storm',  label: 'Kara Bulut',      desc: 'Tüm para çarpanı +0.1',    stat: 'coinMul',        kind: 'add', per: 0.1,  max: 5, baseCost: 8000,  growth: 1.3,  parent: 'core',      need: 1, pos: [1, -1] },
-      { id: 'lightning', branch: 'storm',  label: 'Şimşek',          desc: 'En yüksek kombo +0.25',    stat: 'comboMax',       kind: 'add', per: 0.25, max: 4, baseCost: 15000, growth: 1.35, parent: 'storm',     need: 2, pos: [1, -2] },
-      { id: 'thunder',   branch: 'storm',  label: 'Gök Gürültüsü',   desc: 'Kombo adımı +0.25',        stat: 'comboStep',      kind: 'add', per: 0.25, max: 1, baseCost: 40000, growth: 1,    parent: 'storm',     need: 1, pos: [2, -2] },
-      { id: 'downpour',  branch: 'storm',  label: 'Sağanak',         desc: '+1 şiddet',                stat: 'rainRate',       kind: 'add', per: 1,    max: 5, baseCost: 12000, growth: 1.3,  parent: 'thunder',   need: 1, pos: [3, -2] },
-      { id: 'eye',       branch: 'storm',  label: 'Fırtına Gözü',    desc: 'Tüm para çarpanı +0.1',    stat: 'coinMul',        kind: 'add', per: 0.1,  max: 5, baseCost: 25000, growth: 1.2,  parent: 'lightning', need: 2, pos: [1, -3] },
+      { id: 'storm',     branch: 'storm',  label: 'Kara Bulut',      desc: 'Tüm para çarpanı +0.1',    stat: 'coinMul',        kind: 'add', per: 0.1,  max: 5, baseCost: 8000,  growth: 1.3,  parent: 'core',      need: 1, pos: [2.44, -2.44] },
+      { id: 'lightning', branch: 'storm',  label: 'Şimşek',          desc: 'En yüksek kombo +0.25',    stat: 'comboMax',       kind: 'add', per: 0.25, max: 4, baseCost: 15000, growth: 1.35, parent: 'storm',     need: 2, pos: [2.44, -3.69] },
+      { id: 'thunder',   branch: 'storm',  label: 'Gök Gürültüsü',   desc: 'Kombo adımı +0.25',        stat: 'comboStep',      kind: 'add', per: 0.25, max: 1, baseCost: 40000, growth: 1,    parent: 'storm',     need: 1, pos: [3.69, -3.69] },
+      { id: 'downpour',  branch: 'storm',  label: 'Sağanak',         desc: '+1 şiddet',                stat: 'rainRate',       kind: 'add', per: 1,    max: 5, baseCost: 12000, growth: 1.3,  parent: 'thunder',   need: 1, pos: [4.94, -3.69] },
+      { id: 'eye',       branch: 'storm',  label: 'Fırtına Gözü',    desc: 'Tüm para çarpanı +0.1',    stat: 'coinMul',        kind: 'add', per: 0.1,  max: 5, baseCost: 25000, growth: 1.2,  parent: 'lightning', need: 2, pos: [2.44, -4.94] },
 
       // Rain + soil (right)
-      { id: 'radius',    branch: 'rain',   label: 'Yağmur Alanı',    desc: '+8 alan',                  stat: 'rainRadius',     kind: 'add', per: 8,    max: 4, baseCost: 10,    growth: 1.7,  parent: 'core',      need: 1, pos: [1, 0] },
-      { id: 'flow',      branch: 'rain',   label: 'Yağmur Şiddeti',  desc: '+1 şiddet',                stat: 'rainRate',       kind: 'add', per: 1,    max: 4, baseCost: 16,    growth: 1.8,  parent: 'radius',    need: 1, pos: [2, 0] },
-      { id: 'radius2',   branch: 'rain',   label: 'Geniş Bulut',     desc: '+12 alan',                 stat: 'rainRadius',     kind: 'add', per: 12,   max: 3, baseCost: 200,   growth: 2.2,  parent: 'radius',    need: 3, pos: [2, 1] },
-      { id: 'flow2',     branch: 'rain',   label: 'Bol Yağmur',      desc: '+2 şiddet',                stat: 'rainRate',       kind: 'add', per: 2,    max: 3, baseCost: 500,   growth: 2.3,  parent: 'flow',      need: 3, pos: [3, 0] },
-      { id: 'soil',      branch: 'rain',   label: 'Yumuşak Toprak',  desc: 'Her çiçek −1 su ister',    stat: 'needReduce',     kind: 'add', per: 1,    max: 2, baseCost: 12000, growth: 2.5,  parent: 'flow2',     need: 2, pos: [4, 0] },
+      { id: 'radius',    branch: 'rain',   label: 'Yağmur Alanı',    desc: '+8 alan',                  stat: 'rainRadius',     kind: 'add', per: 8,    max: 4, baseCost: 10,    growth: 1.7,  parent: 'core',      need: 1, pos: [2.65, 0] },
+      { id: 'flow',      branch: 'rain',   label: 'Yağmur Şiddeti',  desc: '+1 şiddet',                stat: 'rainRate',       kind: 'add', per: 1,    max: 4, baseCost: 16,    growth: 1.8,  parent: 'radius',    need: 1, pos: [3.9, 0] },
+      { id: 'radius2',   branch: 'rain',   label: 'Geniş Bulut',     desc: '+12 alan',                 stat: 'rainRadius',     kind: 'add', per: 12,   max: 3, baseCost: 200,   growth: 2.2,  parent: 'radius',    need: 3, pos: [3.9, 1.25] },
+      { id: 'flow2',     branch: 'rain',   label: 'Bol Yağmur',      desc: '+2 şiddet',                stat: 'rainRate',       kind: 'add', per: 2,    max: 3, baseCost: 500,   growth: 2.3,  parent: 'flow',      need: 3, pos: [5.15, 0] },
+      { id: 'crit',      branch: 'rain',   label: 'Kritik',          desc: 'Kritik ihtimali +%5',      stat: 'critChance',     kind: 'add', per: 5,    max: 4, baseCost: 80,    growth: 2.2,  parent: 'flow',      need: 1, pos: [5.15, 1.25] },
+      { id: 'critpow',   branch: 'rain',   label: 'Ağır Damla',      desc: '+1 sn kritik sulama',      stat: 'critSec',        kind: 'add', per: 1,    max: 3, baseCost: 300,   growth: 2.5,  parent: 'crit',      need: 1, pos: [6.4, 1.25] },
+      { id: 'droprate',  branch: 'rain',   label: 'Damla Sıklığı',   desc: 'İri damlalar daha sık düşer', stat: 'dropRate',   kind: 'add', per: 1,    max: 3, baseCost: 250,   growth: 2.4,  parent: 'crit',      need: 1, pos: [5.15, 2.5] },
+      { id: 'soil',      branch: 'rain',  label: 'Yumuşak Toprak',  desc: 'Her çiçek −1 su ister',    stat: 'needReduce',     kind: 'add', per: 1,    max: 2, baseCost: 12000, growth: 2.5,  parent: 'flow2',     need: 2, pos: [6.4, 0] },
 
       // Seasons / time (down): hard cap +10 s total (3×1 + 2×2 + 1×3)
-      { id: 'sundial',   branch: 'time',   label: 'Güneş Saati',     desc: 'Çiçek açınca %5 ihtimalle +1 sn', stat: 'timeChance', kind: 'add', per: 5, max: 4, baseCost: 120, growth: 2.2, parent: 'time1', need: 1, pos: [1, 1] },
-      { id: 'time1',     branch: 'time',   label: 'İlkbahar',        desc: '+1 sn run süresi',         stat: 'timeBonus',      kind: 'add', per: 1,    max: 3, baseCost: 150,   growth: 2.5,  parent: 'core',      need: 1, pos: [0, 1] },
-      { id: 'time2',     branch: 'time',   label: 'Yaz',             desc: '+2 sn run süresi',         stat: 'timeBonus',      kind: 'add', per: 2,    max: 2, baseCost: 6000,  growth: 2.5,  parent: 'time1',     need: 3, pos: [0, 2] },
-      { id: 'time3',     branch: 'time',   label: 'Uzun Yaz',        desc: '+3 sn run süresi',         stat: 'timeBonus',      kind: 'add', per: 3,    max: 1, baseCost: 40000, growth: 1,    parent: 'time2',     need: 2, pos: [0, 3] },
+      { id: 'sundial',   branch: 'time',   label: 'Güneş Saati',     desc: 'Çiçek açınca %5 ihtimalle +1 sn', stat: 'timeChance', kind: 'add', per: 5, max: 4, baseCost: 120, growth: 2.2, parent: 'time1', need: 1, pos: [1.25, 2.65] },
+      { id: 'time1',     branch: 'time',   label: 'İlkbahar',        desc: '+1 sn run süresi',         stat: 'timeBonus',      kind: 'add', per: 1,    max: 3, baseCost: 150,   growth: 2.5,  parent: 'core',      need: 1, pos: [0, 2.65] },
+      { id: 'time2',     branch: 'time',   label: 'Yaz',             desc: '+2 sn run süresi',         stat: 'timeBonus',      kind: 'add', per: 2,    max: 2, baseCost: 6000,  growth: 2.5,  parent: 'time1',     need: 3, pos: [0, 3.9] },
+      { id: 'time3',     branch: 'time',   label: 'Uzun Yaz',        desc: '+3 sn run süresi',         stat: 'timeBonus',      kind: 'add', per: 3,    max: 1, baseCost: 40000, growth: 1,    parent: 'time2',     need: 2, pos: [0, 5.15] },
 
       // Wind / movement (down-left)
-      { id: 'wind',      branch: 'wind',   label: 'Rüzgar',          desc: '+1 hız',                   stat: 'cloudSpeed',     kind: 'add', per: 1,    max: 4, baseCost: 10,    growth: 1.7,  parent: 'core',      need: 1, pos: [-1, 1] },
-      { id: 'gust',      branch: 'wind',   label: 'Fırtına Rüzgarı', desc: '+2 hız',                   stat: 'cloudSpeed',     kind: 'add', per: 2,    max: 2, baseCost: 400,   growth: 2.5,  parent: 'wind',      need: 3, pos: [-2, 2] },
-      { id: 'windseed',  branch: 'wind',   label: 'Tohum Rüzgarı',   desc: '+5 bitki',                 stat: 'plantCount',     kind: 'add', per: 5,    max: 2, baseCost: 3000,  growth: 2,    parent: 'wind',      need: 2, pos: [-1, 2] },
+      { id: 'wind',      branch: 'wind',   label: 'Rüzgar',          desc: '+1 hız',                   stat: 'cloudSpeed',     kind: 'add', per: 1,    max: 4, baseCost: 10,    growth: 1.7,  parent: 'core',      need: 1, pos: [-2.44, 2.44] },
+      { id: 'gust',      branch: 'wind',   label: 'Fırtına Rüzgarı', desc: '+2 hız',                   stat: 'cloudSpeed',     kind: 'add', per: 2,    max: 2, baseCost: 400,   growth: 2.5,  parent: 'wind',      need: 3, pos: [-3.69, 3.69] },
+      { id: 'windseed',  branch: 'wind',   label: 'Tohum Rüzgarı',   desc: '+5 bitki',                 stat: 'plantCount',     kind: 'add', per: 5,    max: 2, baseCost: 3000,  growth: 2,    parent: 'wind',      need: 2, pos: [-2.44, 3.69] },
+      { id: 'link',      branch: 'wind',   label: 'Kök Bağı',        desc: 'Bağlantı ihtimali +%5',    stat: 'linkChance',     kind: 'add', per: 5,    max: 4, baseCost: 300,   growth: 2.3,  parent: 'windseed',  need: 1, pos: [-2.44, 4.94] },
 
       // Bounty + flowers (left): every flower unlock lives here
-      { id: 'bounty',    branch: 'bounty', label: 'Bereket',         desc: 'Her çiçek +1 para',        stat: 'coinBonus',      kind: 'add', per: 1,    max: 5, baseCost: 14,    growth: 1.8,  parent: 'core',      need: 1, pos: [-1, 0] },
-      { id: 'seeds',     branch: 'bounty', label: 'Tohum',           desc: '+5 bitki',                 stat: 'plantCount',     kind: 'add', per: 5,    max: 5, baseCost: 25,    growth: 2,    parent: 'bounty',    need: 1, pos: [-2, 0] },
-      { id: 'puddle',    branch: 'bounty', label: 'Birikinti',       desc: 'Kalan su: alan başına +1 altın', stat: 'leftoverGold', kind: 'add', per: 1, max: 2, baseCost: 60,    growth: 3,    parent: 'bounty',    need: 2, pos: [-2, -1] },
-      { id: 'sprout',    branch: 'bounty', label: 'Filizlenme',      desc: 'Açan çiçek +%1.5 ihtimalle yeni fidan bırakır', stat: 'respawnChance', kind: 'add', per: 1.5, max: 5, baseCost: 60, growth: 2.2, parent: 'seeds', need: 1, pos: [-2, 1] },
-      { id: 'cluster',   branch: 'bounty', label: 'Tohum Kümesi',    desc: 'Küme ihtimali +%5',        stat: 'clusterChance',  kind: 'add', per: 5,    max: 3, baseCost: 80,    growth: 2.5,  parent: 'sprout',    need: 1, pos: [-3, 2] },
-      { id: 'daisy',     branch: 'bounty', label: 'Papatya Tarhı',   desc: 'Papatya ihtimali +%10', stat: 'daisyChance', kind: 'add', per: 10, max: 3, baseCost: 30, growth: 2, parent: 'bounty', need: 1, pos: [-1, -1] },
-      { id: 'tulip',     branch: 'bounty', label: 'Lale Tarhı',      desc: 'Lale ihtimali +%10', stat: 'tulipChance', kind: 'add', per: 10, max: 3, baseCost: 40,    growth: 2.2,  parent: 'seeds',     need: 1, pos: [-3, 1] },
-      { id: 'lavender',  branch: 'bounty', label: 'Lavanta',         desc: 'Lavanta ihtimali +%10', stat: 'lavenderChance', kind: 'add', per: 10, max: 2, baseCost: 1000,  growth: 2,    parent: 'tulip',     need: 2, pos: [-4, 1] },
-      { id: 'rare',      branch: 'bounty', label: 'Gül Bahçesi',     desc: 'Gül ihtimali +%10', stat: 'roseChance', kind: 'add', per: 10, max: 3, baseCost: 90,    growth: 2.3,  parent: 'seeds',     need: 2, pos: [-3, 0] },
-      { id: 'gold',      branch: 'bounty', label: 'Altın Gül',       desc: 'Her gül +5 para',          stat: 'roseBonus',      kind: 'add', per: 5,    max: 3, baseCost: 1200,  growth: 2,    parent: 'rare',      need: 2, pos: [-3, -1] },
-      { id: 'bluebell',  branch: 'bounty', label: 'Çan Çiçeği',      desc: 'Çan çiçeği ihtimali +%10', stat: 'bluebellChance', kind: 'add', per: 10, max: 2, baseCost: 700,   growth: 2,    parent: 'rare',      need: 1, pos: [-4, 0] },
-      { id: 'sunflower', branch: 'bounty', label: 'Ayçiçeği',        desc: 'Ayçiçeği ihtimali +%10', stat: 'sunflowerChance', kind: 'add', per: 10, max: 2, baseCost: 6000,  growth: 2,    parent: 'rare',      need: 1, pos: [-5, 0] },
-      { id: 'pollen',    branch: 'bounty', label: 'Altın Polen',     desc: 'Ayçiçeği ×2 para',         stat: 'sunflowerMul',   kind: 'add', per: 1,    max: 1, baseCost: 30000, growth: 1,    parent: 'sunflower', need: 2, pos: [-5, -1] },
-      { id: 'skylily',   branch: 'bounty', label: 'Gök Zambağı',     desc: 'Gök zambağı ihtimali +%10', stat: 'skylilyChance', kind: 'add', per: 10, max: 2, baseCost: 20000, growth: 2,    parent: 'sunflower', need: 1, pos: [-6, 0] },
+      { id: 'bounty',    branch: 'bounty', label: 'Bereket',         desc: 'Her çiçek +1 para',        stat: 'coinBonus',      kind: 'add', per: 1,    max: 5, baseCost: 14,    growth: 1.8,  parent: 'core',      need: 1, pos: [-2.65, 0] },
+      { id: 'seeds',     branch: 'bounty', label: 'Tohum',           desc: '+5 bitki',                 stat: 'plantCount',     kind: 'add', per: 5,    max: 5, baseCost: 25,    growth: 2,    parent: 'bounty',    need: 1, pos: [-3.9, 0] },
+      { id: 'puddle',    branch: 'bounty', label: 'Birikinti',       desc: 'Kalan su: alan başına +1 altın', stat: 'leftoverGold', kind: 'add', per: 1, max: 2, baseCost: 60,    growth: 3,    parent: 'bounty',    need: 2, pos: [-3.9, -1.25] },
+      { id: 'goldseed',  branch: 'bounty', label: 'Altın Tohum',     desc: 'Altın çiçek ihtimali +%1', stat: 'goldChance',     kind: 'add', per: 1,    max: 4, baseCost: 150,   growth: 2.3,  parent: 'puddle',    need: 1, pos: [-3.9, -2.5] },
+      { id: 'goldval',   branch: 'bounty', label: 'Altın Değer',     desc: 'Altın çiçek parası +×2',   stat: 'goldMul',        kind: 'add', per: 2,    max: 3, baseCost: 600,   growth: 2.5,  parent: 'goldseed',  need: 1, pos: [-5.15, -2.5] },
+      { id: 'sprout',    branch: 'bounty', label: 'Filizlenme',      desc: 'Açan çiçek +%1.5 ihtimalle yeni fidan bırakır', stat: 'respawnChance', kind: 'add', per: 1.5, max: 5, baseCost: 60, growth: 2.2, parent: 'seeds', need: 1, pos: [-3.9, 1.25] },
+      { id: 'cluster',   branch: 'bounty', label: 'Tohum Kümesi',    desc: 'Küme ihtimali +%5',        stat: 'clusterChance',  kind: 'add', per: 5,    max: 3, baseCost: 80,    growth: 2.5,  parent: 'sprout',    need: 1, pos: [-5.15, 2.5] },
+      { id: 'daisy',     branch: 'bounty', label: 'Papatya Tarhı',   desc: 'Papatya ihtimali +%10', stat: 'daisyChance', kind: 'add', per: 10, max: 3, baseCost: 30, growth: 2, parent: 'bounty', need: 1, pos: [-2.65, -1.25] },
+      { id: 'tulip',     branch: 'bounty', label: 'Lale Tarhı',      desc: 'Lale ihtimali +%10', stat: 'tulipChance', kind: 'add', per: 10, max: 3, baseCost: 40,    growth: 2.2,  parent: 'seeds',     need: 1, pos: [-5.15, 1.25] },
+      { id: 'lavender',  branch: 'bounty', label: 'Lavanta',         desc: 'Lavanta ihtimali +%10', stat: 'lavenderChance', kind: 'add', per: 10, max: 2, baseCost: 1000,  growth: 2,    parent: 'tulip',     need: 2, pos: [-6.4, 1.25] },
+      { id: 'rare',      branch: 'bounty', label: 'Gül Bahçesi',     desc: 'Gül ihtimali +%10', stat: 'roseChance', kind: 'add', per: 10, max: 3, baseCost: 90,    growth: 2.3,  parent: 'seeds',     need: 2, pos: [-5.15, 0] },
+      { id: 'gold',      branch: 'bounty', label: 'Gül Bahçıvanı',   desc: 'Her gül +5 para',          stat: 'roseBonus',      kind: 'add', per: 5,    max: 3, baseCost: 1200,  growth: 2,    parent: 'rare',      need: 2, pos: [-5.15, -1.25] },
+      { id: 'bluebell',  branch: 'bounty', label: 'Çan Çiçeği',      desc: 'Çan çiçeği ihtimali +%10', stat: 'bluebellChance', kind: 'add', per: 10, max: 2, baseCost: 700,   growth: 2,    parent: 'rare',      need: 1, pos: [-6.4, 0] },
+      { id: 'sunflower', branch: 'bounty', label: 'Ayçiçeği',        desc: 'Ayçiçeği ihtimali +%10', stat: 'sunflowerChance', kind: 'add', per: 10, max: 2, baseCost: 6000,  growth: 2,    parent: 'rare',      need: 1, pos: [-7.65, 0] },
+      { id: 'pollen',    branch: 'bounty', label: 'Altın Polen',     desc: 'Ayçiçeği ×2 para',         stat: 'sunflowerMul',   kind: 'add', per: 1,    max: 1, baseCost: 30000, growth: 1,    parent: 'sunflower', need: 2, pos: [-7.65, -1.25] },
+      { id: 'skylily',   branch: 'bounty', label: 'Gök Zambağı',     desc: 'Gök zambağı ihtimali +%10', stat: 'skylilyChance', kind: 'add', per: 10, max: 2, baseCost: 20000, growth: 2,    parent: 'sunflower', need: 1, pos: [-8.9, 0] },
+
+      // Mini clouds (storm)
+      { id: 'minicloud',  branch: 'storm', label: 'Bulutçuk', desc: '+1 mini bulut', stat: 'miniClouds', kind: 'add', per: 1, max: 2, baseCost: 2000, growth: 3, parent: 'eye', need: 1, pos: [3.69, -4.94] },
+      { id: 'minipow',    branch: 'storm', label: 'Bulutçuk Şiddeti', desc: '+1 şiddet', stat: 'miniRate', kind: 'add', per: 1, max: 3, baseCost: 3000, growth: 2.2, parent: 'minicloud', need: 1, pos: [4.94, -4.94] },
+      { id: 'minispeed',  branch: 'storm', label: 'Bulutçuk Hızı', desc: '+1 hız', stat: 'miniSpeed', kind: 'add', per: 1, max: 2, baseCost: 2500, growth: 2.5, parent: 'minicloud', need: 1, pos: [3.69, -6.19] },
+
+      // Sudden shower (time)
+      { id: 'shower',     branch: 'time', label: 'Ani Yağmur', desc: 'Ara sıra rastgele bir yere yağmur yağar', stat: 'showerOn', kind: 'add', per: 1, max: 1, baseCost: 400, growth: 1, parent: 'sundial', need: 1, pos: [1.25, 3.9] },
+      { id: 'showerwide', branch: 'time', label: 'Geniş Yağmur', desc: '+1 alan', stat: 'showerSize', kind: 'add', per: 1, max: 3, baseCost: 600, growth: 2.2, parent: 'shower', need: 1, pos: [2.5, 3.9] },
+      { id: 'showerfreq', branch: 'time', label: 'Sık Yağmur', desc: '−2 sn aralık', stat: 'showerFreq', kind: 'add', per: 1, max: 3, baseCost: 800, growth: 2.4, parent: 'shower', need: 1, pos: [1.25, 5.15] },
+
+      // Moist soil (bounty)
+      { id: 'moist',      branch: 'bounty', label: 'Nemli Toprak', desc: 'Yeşil zemindeki çiçekler kendiliğinden sulanır', stat: 'moistOn', kind: 'add', per: 1, max: 1, baseCost: 300, growth: 1, parent: 'daisy', need: 1, pos: [-2.65, -2.5] },
+      { id: 'roots',      branch: 'bounty', label: 'Derin Kökler', desc: '+0.5 su/sn', stat: 'moistRate', kind: 'add', per: 1, max: 3, baseCost: 500, growth: 2.2, parent: 'moist', need: 1, pos: [-3.9, -3.75] },
     ],
   };
 })(window.RD = window.RD || {});

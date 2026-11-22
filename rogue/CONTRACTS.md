@@ -380,3 +380,116 @@ Supersedes countStat / filler weight and level.bloomNeed.
   separate node `sprout` "Filizlenme" (child of seeds): respawnChance +1.5 per level (max 5); `cluster` moved under it. A bloom (not a rebloom) rolls respawnChance → `spawnSeedling()`, pushed before
   the bloom event. The info window shows the `also` stat as a second effect line.
 - (n) `groundMul` 0.5 (rain → soil). Bloom patches unchanged.
+
+## Crit (big drop) + golden flowers (2026-11-23 o)
+**Config (js/config.js)**
+- `base`: `critChance: 5` (%), `critSec: 0` (extra s), `dropRate: 0` (levels), `goldChance: 1` (%), `goldMul: 5` (×).
+- `CONFIG.bigDrop = { interval: 0.6, minInterval: 0.3, step: 0.1, fall: 0.3, critSec: 2 }`.
+  Drop interval = max(minInterval, interval − step·dropRate). Crit amount = `stats.rainRate × (bigDrop.critSec + stats.critSec)`.
+- Tree nodes (rain branch): `crit` "Kritik" critChance +5 ×4 (parent flow, pos [3,1]); `critpow` "Ağır Damla" critSec +1 ×3
+  (parent crit, [4,1]); `droprate` "Damla Sıklığı" dropRate +1 ×3 (parent crit, [3,2]).
+  Bounty branch: `goldseed` "Altın Tohum" goldChance +1 ×4 (parent puddle, [-2,-2]); `goldval` "Altın Değer" goldMul +2 ×3
+  (parent goldseed, [-3,-2]). Old node `gold` label → "Gül Bahçıvanı" (id unchanged).
+
+**Run (js/run.js)**
+- `this.drops = []`, `this.dropT = 0`. While raining, `dropT += dt`; at the interval spawn one drop:
+  `{ sx, sy, x, y, t: 0, fall, target, crit: false }` — `sx,sy` = cloud pos at spawn; target = random growing plant or
+  not-done boss part under the rain (same reach test as normal watering); `x,y` = target pos, or a random point in the
+  rain circle when there is no target (`target: null`). Not raining: dropT resets to 0, no new drops; falling ones finish.
+- Landing (`t >= fall`): removed from `drops`; if target still valid (plant `growing` / part not `done`), roll critChance.
+  Crit on a plant: `p.water += amount`; if ≥ need → `this.combo = comboOf(p.group || 1)`, `_bloom(p)`.
+  Crit on a boss part: add `amount` only where normal rain would count (arms: always; shield: only if `boss.shield >= 1`;
+  shade: only if not `scorched`); the boss completion check runs as usual.
+  Always push `{ type: 'drop', x, y, hit: bool, crit: bool }` (hit = landed on a valid target).
+- Golden: `_spawnPlant` sets `golden = Math.random()*100 < stats.goldChance`. `_bloom`: coin `extraMul *= goldMul` when golden;
+  bloom event gets `golden: true|false`. Bar points unchanged. Result `golden` count = `this.goldens` (blooms of golden plants).
+
+**Render (js/render.js, js/flora.js)**
+- Draw every `run.drops` entry each frame: a large drop falling from (sx,sy) to (x,y) by `t/fall`.
+- `'drop'` event: small splash; `crit` → big splash + outlined "Kritik!" popup (no box).
+- `RD.Flora.draw(..., opts.golden = true)` draws the whole plant (stem, leaves, petals, body) in a gold palette
+  (luminance-mapped ramp), plus a soft sparkle; render passes `golden: p.golden`. Golden bloom popup coin text in gold.
+- (p, 2026-11-23) Flower traits removed for now (comboX, refund, rebloom, wilt deleted from `plants`; code keeps the
+  guarded paths). Non-crit big drop lands like a normal raindrop (splash only, no bouncing particles/ring); crit keeps its burst.
+
+## Tree spread (2026-11-23 q)
+- Node `pos` = old grid × 1.25 + branch direction × 1.4 (water up, storm up-right, rain right, time down, wind down-left,
+  bounty left): each branch is its own island reaching out from `core`. New nodes keep ≥ 1.25 between nodes.
+
+## Water splash + linked flowers (2026-11-23 r)
+**Config**
+- `base`: `splashChance: 0` (%), `splashSec: 0` (extra s), `splashCount: 0` (extra targets), `linkChance: 0` (%).
+- `CONFIG.splash = { sec: 1, count: 1, fly: 0.4 }`; `CONFIG.link = { minDist: 160 }`.
+- Nodes (water branch): `splash` "Su Sekmesi" splashChance +10 ×5 (parent dew, pos [0, -6.4], baseCost 200, growth 2.2);
+  `splashpow` "Sekme Gücü" splashSec +1 ×3 (parent splash, [-1.25, -6.4], 500, 2.4);
+  `splashmulti` "Çoklu Sekme" splashCount +1 ×2 (parent splash, [0, -7.65], 1500, 3).
+  Wind branch: `link` "Kök Bağı" linkChance +5 ×4 (parent windseed, [-2.44, 4.94], 300, 2.3).
+**Run**
+- Splash: in `_bloom` (any bloom, also reblooms; not when `this.over`), roll splashChance; on hit pick the
+  `splash.count + splashCount` nearest OTHER `growing` plants and push one flyer each to `this.splashes`:
+  `{ sx, sy, x, y, t: 0, fly: splash.fly, target: plant }`, amount = `rainRate × (splash.sec + splashSec)`.
+  Push the flyers BEFORE the bloom event (bloom event stays last). `_updateSplashes(dt)` runs every update (also not
+  raining): on landing remove it; if target still `growing`: `water += amount`, if ≥ need → `this.combo = 1` then
+  `_bloom(target)` (can chain). Push `{ type: 'splash', x, y, hit }` on landing.
+- Links: after `_spawnInitial`, each plant without a link rolls linkChance; on hit pair it with a random unlinked
+  plant ≥ `link.minDist` away (none → no link). Set `p.link = q.id`, `q.link = p.id` (ids). Seedlings spawned later are never linked.
+- Watering: after the normal rain loop, for each plant that was watered under the rain this frame (`p.wet` true),
+  its partner (if `growing` and not itself wet this frame) gets the same `amount`, is flagged `p.linkWet = true`
+  (reset every frame), and blooms at need with `this.combo = 1` (links never count for the combo; partner `group` untouched).
+**Render**
+- `run.splashes`: a water blob flying on an arc from (sx,sy) to (x,y) by t/fly; `'splash'` event: normal small splash.
+- Links: a thin green vine between linked plants while BOTH are `growing` (look up by id in `run.plants`); when either
+  has `linkWet`, a soft water-blue pulse flows along the vine toward the partner. Under plants, above the ground.
+
+## Mini clouds + moist soil + sudden shower (2026-11-23 s)
+None of these count for the combo (blooms they cause use `this.combo = 1`, plant `group` untouched) and none roll crits.
+Blooms they cause go through `_bloom` (so splash works). Links pass water only from player rain and mini clouds
+(set `p.miniWet = true` for plants a mini cloud waters this frame, reset every frame; link code uses `p.wet || p.miniWet`).
+**Config**
+- `base`: `miniClouds: 0`, `miniRate: 0`, `miniSpeed: 0`, `moistOn: 0`, `moistRate: 0`, `showerOn: 0`, `showerSize: 0`, `showerFreq: 0`.
+- `CONFIG.mini = { r: 26, rateMul: 0.5, speed: 45, speedStep: 20 }` — rain radius px; water/s = rainRate × rateMul + miniRate;
+  px/s = speed + speedStep × miniSpeed.
+- `CONFIG.moist = { rate: 0.5, step: 0.5 }` — water/s = rate + step × moistRate.
+- `CONFIG.shower = { interval: 20, step: 2, minInterval: 12, warn: 1.2, dur: 3.5, r: 70, rStep: 14, rate: 3 }`.
+- Nodes:
+  storm: `minicloud` "Bulutçuk" miniClouds +1 ×2 (parent eye, [3.69, -4.94], 2000, 3) desc '+1 mini bulut';
+  `minipow` "Bulutçuk Şiddeti" miniRate +1 ×3 (parent minicloud, [4.94, -4.94], 3000, 2.2) desc '+1 şiddet';
+  `minispeed` "Bulutçuk Hızı" miniSpeed +1 ×2 (parent minicloud, [3.69, -6.19], 2500, 2.5) desc '+1 hız'.
+  time: `shower` "Ani Yağmur" showerOn +1 ×1 (parent sundial, [1.25, 3.9], 400, 1) desc 'Ara sıra rastgele bir yere yağmur yağar';
+  `showerwide` "Geniş Yağmur" showerSize +1 ×3 (parent shower, [2.5, 3.9], 600, 2.2) desc '+1 alan';
+  `showerfreq` "Sık Yağmur" showerFreq +1 ×3 (parent shower, [1.25, 5.15], 800, 2.4) desc '−2 sn aralık'.
+  bounty: `moist` "Nemli Toprak" moistOn +1 ×1 (parent daisy, [-2.65, -2.5], 300, 1) desc 'Yeşil zemindeki çiçekler kendiliğinden sulanır';
+  `roots` "Derin Kökler" moistRate +1 ×3 (parent moist, [-3.9, -3.75], 500, 2.2) desc '+0.5 su/sn'.
+**Run**
+- `this.minis = []` built in the constructor: `miniClouds` entries `{ x, y, target: null }`, spread around the field.
+  Each frame (not over): pick/keep a target = nearest growing plant not targeted by another mini; move toward it at
+  the speed; water every growing plant within `mini.r` (`p.miniWet = true`, bloom at need with combo 1); also
+  `_waterGround(x, y, r, rate × groundMul × dt)`. No target → drift slowly. Minis work while the player is not raining too.
+- Moist soil (`moistOn > 0`): every growing plant whose cell is `greened` and that is not `wet`/`miniWet` this frame
+  gets moist water/s; flag `p.moist = true` (reset every frame) for the render.
+- Shower (`showerOn > 0`): `this.shower = null | { x, y, r, t, phase: 'warn' | 'rain' }`. Timer `showerT` counts up;
+  at `max(minInterval, interval − step × showerFreq)` spawn centred on a random growing plant (none → random spot),
+  `r = shower.r + rStep × showerSize`, phase 'warn' for `warn` s, then 'rain' for `dur` s: waters plants inside at
+  `shower.rate` water/s (`p.showerWet = true`, reset every frame) and greens the ground like rain; then null and the
+  timer restarts. Events: `{ type: 'shower', x, y, r }` when the rain phase starts.
+**Render**
+- Minis: small cloud (reuse drawCloudArt at ~0.5 scale, drawn above plants like the main cloud) with its own light rain.
+- Shower warn: a darkening, soft shadow circle on the ground that grows in; rain phase: a cloud drifts over it with
+  rain falling across the circle; fade out at the end.
+- Moist plants: faint rising vapor wisps (very subtle).
+
+## Growing-garden stages (2026-11-23 t, PRD §19)
+**Config:** `CONFIG.stages = { count: 3, needMul: [1, 1.5, 2.2], chanceBonus: 10, timeAdd: 12, shrink: 0.5, pause: 1.8 }`.
+**Run (done):**
+- `run.stage` (1-based), `run.stageCount` (3 with a level, else 1). `run.bloomNeed = bloomNeedBase × needMul[stage−1]`.
+- A full bar in stage < stageCount sets `_stageUpPending`; at the END of that update `_stageUp()` runs:
+  old plants removed (`run.plants` is a NEW array of fresh plants, new ids), drops/splashes/shower cleared, mini targets
+  reset; the soil grid (`soil`, `greened`) is resampled so the old field shrinks ×`shrink` around the field centre
+  (core stays green, does not count for the new bar); bar = 0; time += timeAdd; fresh `plantCount` plants placed with
+  flower chances +chanceBonus % per stage after the first; links re-rolled.
+  Pushes `{ type: 'stage', stage, of, shrink, time }` — the canvas still shows the LAST frame of the old field at this moment.
+- `run.zoom = { t, dur, stage }` for `pause` s after that: `update()` returns at once (timer, water, everything frozen).
+  `run.zoom` becomes null when the pause ends. Render keeps drawing every frame with real dt.
+- Full bar in the last stage → boss in the middle (unchanged). Field size never changes; cloud keeps its size.
+- `result()` adds `stage`, `stageCount`.
+**Render / UI (to do):** the zoom-out must FEEL like the garden grows and the camera pulls back (see PRD §19).
